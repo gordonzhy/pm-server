@@ -1,0 +1,7 @@
+**/*.test.mjs
+**/test_*.py
+scripts/*browser-test.mjs
+scripts/workbench-test-client.mjs
+__pycache__/
+*.pyc
+*.tgz

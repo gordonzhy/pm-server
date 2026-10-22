@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "origin": "pre-split project-manager",
+  "originCommit": "50a3cd6ea29d72f14c429a4051570f042d15ae53",
+  "originHashes": {
+    "scripts/task-log.mjs": "50a6731cf268c3aba074d52c7e0d02d9fd9d37d62f89792a8e221ca6e5eaf037",
+    "scripts/task-log-resources.mjs": "07fb6ef82ea3e318dcab3443650d0b74116b9837214bc7a881a24e694e08ab06",
+    "scripts/testing-dashboard.mjs": "a89d053b5c700f87a8342dd814436d583d2f99b720ed34634b8d33f1c7e30cee",
+    "scripts/workbench-data.mjs": "972fa9f21383e92864ab7cdb9038751d2d459b3489e847ad948b3ca7e3dbd95e",
+    "scripts/workbench-auth.mjs": "43ee3e8c539f56f1f427c543ed2b7afb90b66e81cd361fb4c6dbd078ed8433e8",
+    "scripts/project-config.mjs": "f77c95f685de3c46f1b9f2ceb0dce2eb7297d0c2bb5814c331ef6ba5e1382ab6",
+    "scripts/project-config-v2.mjs": "4f23e2ad89bd6b2325f652e5fa09e725db05202164d5a23c884eb0169c6a283e",
+    "scripts/process-lock.mjs": "a405364dbc7b270df70d2b2c9f0db5aa420cb1f69da355d5f1073cf5671188a9"
+  },
+  "currentHashes": {
+    "scripts/task-log.mjs": "5cf9b6203f345afe552b96a9fd252ce83bf78e7fc582b74b0ef7ff767c44b670",
+    "scripts/task-log-resources.mjs": "27996f3fdcf364a2c44ffb66a8c854e724abdc545f2e943d94050bd13979ba46",
+    "scripts/testing-dashboard.mjs": "a89d053b5c700f87a8342dd814436d583d2f99b720ed34634b8d33f1c7e30cee",
+    "scripts/workbench-data.mjs": "972fa9f21383e92864ab7cdb9038751d2d459b3489e847ad948b3ca7e3dbd95e",
+    "scripts/workbench-auth.mjs": "43ee3e8c539f56f1f427c543ed2b7afb90b66e81cd361fb4c6dbd078ed8433e8",
+    "scripts/project-config.mjs": "f77c95f685de3c46f1b9f2ceb0dce2eb7297d0c2bb5814c331ef6ba5e1382ab6",
+    "scripts/project-config-v2.mjs": "4f23e2ad89bd6b2325f652e5fa09e725db05202164d5a23c884eb0169c6a283e",
+    "scripts/process-lock.mjs": "01ec7a705f2099eea70a13570355de0081187bbd5175a293c8fc7cb65a45e0cd"
+  }
+}

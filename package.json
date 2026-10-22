@@ -1,0 +1,76 @@
+{
+  "name": "pm-server",
+  "version": "0.1.0-rc.15",
+  "description": "A local project control room for AI coding agents: workbench, runtime observation and delivery monitoring.",
+  "type": "module",
+  "bin": {
+    "pm-server": "bin/pm-server.mjs"
+  },
+  "files": [
+    "bin/",
+    "assets/",
+    "contracts/",
+    "README.md",
+    "CHANGELOG.md",
+    "scripts/install-session-runtime-hook.mjs",
+    "scripts/manage-dashboard-service.mjs",
+    "scripts/manage-task-monitor.mjs",
+    "scripts/manage-workbench-service.mjs",
+    "scripts/pause-task-monitor.mjs",
+    "scripts/process-lock.mjs",
+    "scripts/project-config-v2.mjs",
+    "scripts/project-config.mjs",
+    "scripts/run-manager-watch.mjs",
+    "scripts/run-task-monitor.mjs",
+    "scripts/session-runtime-hook.mjs",
+    "scripts/task-log-resources.mjs",
+    "scripts/task-log.mjs",
+    "scripts/task-monitor-policy.mjs",
+    "scripts/task-monitor-service.mjs",
+    "scripts/task-monitor-worker.mjs",
+    "scripts/testing-dashboard.mjs",
+    "scripts/watch-active-tasks.mjs",
+    "scripts/workbench-auth.mjs",
+    "scripts/workbench-data.mjs",
+    "scripts/workbench-registry.mjs",
+    "scripts/workbench-server.mjs",
+    "scripts/workbench.mjs",
+    "lib/paths.mjs",
+    "lib/onboarding.mjs",
+    "lib/codex-integration.mjs",
+    "lib/notifications.mjs",
+    "lib/runtime-cache.mjs",
+    "lib/codex-runtime-observer.mjs",
+    "adapters/dsh/README.md",
+    "adapters/dsh/observer.js",
+    "README.zh-CN.md",
+    "CHANGELOG.zh-CN.md",
+    "adapters/dsh/README.zh-CN.md",
+    "docs/images/",
+    "docs/i18n.md",
+    "docs/usage.md",
+    "docs/usage.zh-CN.md",
+    "lib/setup-wizard.mjs",
+    "lib/share-view.mjs"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node --test scripts/*.test.mjs lib/*.test.mjs adapters/*/*.test.mjs",
+    "check": "node bin/pm-server.mjs doctor --json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gordonzhy/pm-server.git"
+  },
+  "homepage": "https://github.com/gordonzhy/pm-server#readme",
+  "bugs": {
+    "url": "https://github.com/gordonzhy/pm-server/issues"
+  },
+  "license": "MIT"
+}
