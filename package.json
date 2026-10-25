@@ -1,6 +1,6 @@
 {
   "name": "pm-server",
-  "version": "0.1.0-rc.15",
+  "version": "0.1.0-rc.16",
   "description": "A local project control room for AI coding agents: workbench, runtime observation and delivery monitoring.",
   "type": "module",
   "bin": {
@@ -40,6 +40,7 @@
     "lib/codex-integration.mjs",
     "lib/notifications.mjs",
     "lib/runtime-cache.mjs",
+    "lib/hook-event.mjs",
     "lib/codex-runtime-observer.mjs",
     "adapters/dsh/README.md",
     "adapters/dsh/observer.js",

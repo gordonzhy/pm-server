@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-rc.16
+
+- Stream large Hook events while retaining only allowlisted observation metadata.
+- Bound parsing and cache waits, with rate-limited diagnostics when optional observation storage is unavailable.
+
 ## 0.1.0-rc.15
 
 - Invoke the companion skill as `$project-manager` in onboarding prompts.
