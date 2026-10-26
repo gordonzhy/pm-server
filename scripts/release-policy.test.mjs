@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { releaseIdentity, integrity, assertPublicText, validatePackage, existingMatches, newerTag } from './release-policy.mjs';
+import { releaseIdentity, integrity, assertPublicText, validatePackage, existingMatches, newerTag, waitForPublished } from './release-policy.mjs';
 
 const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'gordonzhy/pm-server', GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_NUMBER: '123' };
 const identity = releaseIdentity(env, '0.1.0-rc.16');
@@ -24,8 +24,24 @@ test('versions are unique per run/source, stable across reruns without source co
 test('retry requires exact source and archive integrity', () => {
   const existing = { ...meta, dist: { integrity: integrity(Buffer.from('public package')) } };
   assert(existingMatches(existing, identity, existing.dist.integrity));
+  assert(existingMatches({ ...existing, releaseSource: { run: identity.source.run, commit: identity.source.commit, repository: identity.source.repository } }, identity, existing.dist.integrity));
   assert.throws(() => existingMatches(existing, identity, 'sha512-different'));
   assert.throws(() => existingMatches({ ...existing, releaseSource: { ...identity.source, commit: 'b'.repeat(40) } }, identity, existing.dist.integrity));
+  for (const source of [{ ...identity.source, extra: 'unexpected' }, { repository: identity.source.repository, commit: identity.source.commit }, { ...identity.source, run: 123 }]) assert.throws(() => existingMatches({ ...existing, releaseSource: source }, identity, existing.dist.integrity));
+});
+test('post-publication visibility polls only reads and has a finite missing-version budget', async () => {
+  let reads = 0;
+  const pauses = [];
+  const visible = { version: identity.version };
+  const result = await waitForPublished(async timeout => { assert(timeout > 0 && timeout <= 10000); return ++reads === 3 ? visible : null; }, async ms => pauses.push(ms));
+  assert.equal(result, visible);
+  assert.equal(reads, 3);
+  assert.deepEqual(pauses, [5000, 5000]);
+  reads = 0; pauses.length = 0;
+  assert.equal(await waitForPublished(async () => { reads++; return null; }, async ms => pauses.push(ms)), null);
+  assert.equal(reads, 12);
+  assert.equal(pauses.length, 11);
+  await assert.rejects(waitForPublished(async () => { throw new Error('lookup denied'); }, async () => assert.fail('Do not hide lookup errors')));
 });
 test('metadata rejects lifecycle hooks, local origin, dependency changes and latest', () => {
   validatePackage(meta, identity);
@@ -43,6 +59,7 @@ test('workflow gates the single publishing job on the entire matrix and restrict
   assert.match(publishing, /environment: npm-next/);
   assert.match(publishing, /cancel-in-progress: false/);
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN|pull_request_target|workflow_run/);
+  assert.doesNotMatch(publishing, /run: npm publish/);
 });
 test('real npm pack validates final bytes, deterministic rerun, and rejects an injected private canary', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'release-fixture-'));
@@ -65,15 +82,18 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   const { publish } = await import(pathToFileURL(path.join(root, 'scripts/release-next.mjs')));
   const oidcEnv = { ...process.env, ...env, ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-test-value' };
   delete oidcEnv.NODE_AUTH_TOKEN; delete oidcEnv.NPM_TOKEN;
-  let published = null, writes = 0, latest = '0.1.0-rc.2', next = '0.1.0-rc.16';
+  let published = null, writes = 0, dryRuns = 0, visibilityMisses = 2, latest = '0.1.0-rc.2', next = '0.1.0-rc.16';
+  const visibilityPauses = [];
   const io = {
     headIsCurrent: async () => true,
-    get: async url => url.endsWith('/dist-tags') ? { latest, next } : published,
+    get: async url => url.endsWith('/dist-tags') ? { latest, next } : published && visibilityMisses-- > 0 ? null : published,
+    pause: async ms => visibilityPauses.push(ms),
     npm: (args, options) => {
       if (args[0] === 'pack') return JSON.stringify([first]);
       if (args[0] === 'publish') {
+        if (args.includes('--dry-run')) { dryRuns++; return ''; }
         writes++;
-        published = { ...meta, dist: { integrity: first.integrity, tarball: 'https://example.invalid/public.tgz' } };
+        published = { ...meta, releaseSource: { run: identity.source.run, commit: identity.source.commit, repository: identity.source.repository }, dist: { integrity: first.integrity, tarball: 'https://example.invalid/public.tgz' } };
         next = identity.version;
         return '';
       }
@@ -95,11 +115,25 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   assert.equal(result.latest, latest);
   assert.equal(result.installedFiles, 4);
   assert.equal(writes, 1);
+  assert.equal(dryRuns, 1);
+  assert.deepEqual(visibilityPauses, [5000, 5000]);
   assert.equal((await publish(oidcEnv, io)).status, 'already-published');
   assert.equal(writes, 1);
+  assert.equal(dryRuns, 1);
   published.dist.integrity = 'sha512-mismatch';
   await assert.rejects(publish(oidcEnv, io));
   assert.equal(writes, 1);
+  // A successful registry write with a lost CLI response must be confirmed by
+  // reads, without another upload, even when visibility initially lags.
+  published = null; next = '0.1.0-rc.16'; visibilityMisses = 1;
+  const beforeAmbiguousWrite = writes;
+  const ambiguous = await publish(oidcEnv, { ...io, npm: (args, options) => {
+    const result = io.npm(args, options);
+    if (args[0] === 'publish' && !args.includes('--dry-run')) throw new Error('simulated lost upload response');
+    return result;
+  } });
+  assert.equal(ambiguous.status, 'published-confirmed-after-cli-error');
+  assert.equal(writes, beforeAmbiguousWrite + 1);
   await writeFile(path.join(root, 'contracts/protocol.json'), 'PM_RELEASE_PRIVATE_CANARY');
   assert.throws(run);
   await writeFile(path.join(root, 'contracts/protocol.json'), '{}');

@@ -40,7 +40,6 @@ jobs:
       - run: npm install --global npm@11.16.0 --ignore-scripts
       - run: npm ci --ignore-scripts
       - run: node scripts/release-next.mjs prepare
-      - run: npm publish . --dry-run --ignore-scripts --tag next --access public --registry https://registry.npmjs.org
       - run: node scripts/release-next.mjs publish
       - name: Release receipt
         if: success()

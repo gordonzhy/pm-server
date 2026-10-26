@@ -19,13 +19,29 @@ export function releaseIdentity(env, base) {
 export function integrity(bytes) {
   return `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
 }
+export function sameSource(actual, expected) {
+  return actual !== null && typeof actual === 'object' && !Array.isArray(actual)
+    && Object.keys(actual).length === 3
+    && ['repository', 'commit', 'run'].every(key => Object.hasOwn(actual, key) && actual[key] === expected[key]);
+}
+export async function waitForPublished(fetchVersion, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  const deadline = Date.now() + 60000;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    const version = await fetchVersion(Math.min(10000, remaining));
+    if (version) return version;
+    if (attempt < 11 && Date.now() < deadline) await pause(Math.min(5000, deadline - Date.now()));
+  }
+  return null;
+}
 export function assertPublicText(text) {
   // These are generic leak indicators, not an exhaustive privacy audit.
   assert(!/(?:\/Users\/|\/Volumes\/|C:\\Users\\|-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----|npm_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|PM_RELEASE_PRIVATE_CANARY)/i.test(text), 'Possible private data in release content');
 }
 export function validatePackage(meta, identity) {
   assert(meta.name === 'pm-server' && meta.version === identity.version, 'Package identity mismatch');
-  assert(JSON.stringify(meta.releaseSource) === JSON.stringify(identity.source), 'Source identity mismatch');
+  assert(sameSource(meta.releaseSource, identity.source), 'Source identity mismatch');
   assert(meta.repository?.url === `git+https://github.com/${repository}.git`, 'Unexpected package repository');
   assert(meta.publishConfig?.tag === 'next' && meta.publishConfig?.access === 'public', 'Unsafe publish configuration');
   assert(!meta.dependencies && !meta.optionalDependencies, 'Release dependency policy requires review');
@@ -35,7 +51,7 @@ export function validatePackage(meta, identity) {
 }
 export function existingMatches(existing, identity, expectedIntegrity) {
   assert(existing.version === identity.version && existing.dist?.integrity === expectedIntegrity, 'Existing version differs from candidate');
-  assert(JSON.stringify(existing.releaseSource) === JSON.stringify(identity.source), 'Existing version has a different source');
+  assert(sameSource(existing.releaseSource, identity.source), 'Existing version has a different source');
   return true;
 }
 export function newerTag(current, identity) {

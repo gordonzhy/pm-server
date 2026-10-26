@@ -4,13 +4,13 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { assert, assertPublicText, registry, repository, releaseIdentity, integrity, validatePackage, existingMatches, newerTag } from './release-policy.mjs';
+import { assert, assertPublicText, registry, repository, releaseIdentity, integrity, validatePackage, existingMatches, newerTag, sameSource, waitForPublished } from './release-policy.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const npm = (args, options = {}) => execFileSync('npm', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
-async function get(url, allowMissing = false) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'pm-server-release' } });
+async function get(url, allowMissing = false, timeoutMs = 30000) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache' } });
   if (allowMissing && response.status === 404) return null;
   assert(response.ok, `Release lookup failed (${response.status})`);
   return response.json();
@@ -67,7 +67,7 @@ export async function publish(env = process.env, io = defaultIO) {
   const { get, npm, headIsCurrent, fetch } = io;
   const candidate = await json(path.join(root, '.release/candidate.json'));
   const identity = releaseIdentity(env, (await json(path.join(root, 'package.json'))).version);
-  assert(candidate.version === identity.version && JSON.stringify(candidate.source) === JSON.stringify(identity.source), 'Candidate/environment mismatch');
+  assert(candidate.version === identity.version && sameSource(candidate.source, identity.source), 'Candidate/environment mismatch');
   const archive = path.join(root, '.release', candidate.filename);
   assert(integrity(await readFile(archive)) === candidate.integrity, 'Candidate archive changed');
   if (!await headIsCurrent(identity)) return { status: 'superseded', version: identity.version };
@@ -84,13 +84,15 @@ export async function publish(env = process.env, io = defaultIO) {
     // Repack immediately before publish and require the reviewed archive bytes.
     const [repacked] = JSON.parse(npm(['pack', '--ignore-scripts', '--json', '--pack-destination', path.dirname(archive)]));
     assert(repacked.integrity === candidate.integrity && integrity(await readFile(archive)) === candidate.integrity, 'Prepublish repack differs from candidate');
+    // npm dry-run also rejects an existing version, so run it only on a new release.
+    npm(['publish', '.', '--dry-run', '--ignore-scripts', '--tag', 'next', '--access', 'public', '--registry', registry]);
     assert(await headIsCurrent(identity), 'Source superseded before publish');
     try {
       // Do not echo npm output: it can contain authentication diagnostics.
       npm(['publish', '.', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'next', '--registry', registry]);
     } catch { failed = true; }
   }
-  const published = existing || await get(`${registry}/pm-server/${identity.version}`, true);
+  const published = existing || await waitForPublished(timeout => get(`${registry}/pm-server/${identity.version}`, true, timeout), io.pause);
   assert(published, failed ? 'Publish failed or outcome unknown; inspect registry before rerun' : 'Published version not yet visible; inspect registry before rerun');
   existingMatches(published, identity, candidate.integrity);
   const after = await get(`${registry}/-/package/pm-server/dist-tags`);
