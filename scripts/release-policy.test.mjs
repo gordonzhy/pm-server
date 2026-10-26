@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { releaseIdentity, integrity, assertPublicText, validatePackage, existingMatches, newerTag, waitForPublished } from './release-policy.mjs';
+import { releaseIdentity, integrity, assertPublicText, validatePackage, existingMatches, newerTag, waitForPublished, readbackReceipt } from './release-policy.mjs';
 
 const env = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'gordonzhy/pm-server', GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_NUMBER: '123' };
 const identity = releaseIdentity(env, '0.1.0-rc.16');
@@ -36,12 +36,58 @@ test('post-publication visibility polls only reads and has a finite missing-vers
   const result = await waitForPublished(async timeout => { assert(timeout > 0 && timeout <= 10000); return ++reads === 3 ? visible : null; }, async ms => pauses.push(ms));
   assert.equal(result, visible);
   assert.equal(reads, 3);
-  assert.deepEqual(pauses, [5000, 5000]);
+  assert.deepEqual(pauses, [10000, 10000]);
   reads = 0; pauses.length = 0;
   assert.equal(await waitForPublished(async () => { reads++; return null; }, async ms => pauses.push(ms)), null);
-  assert.equal(reads, 12);
-  assert.equal(pauses.length, 11);
+  assert.equal(reads, 36);
+  assert.equal(pauses.length, 35);
   await assert.rejects(waitForPublished(async () => { throw new Error('lookup denied'); }, async () => assert.fail('Do not hide lookup errors')));
+});
+test('visibility budget obeys the absolute deadline with slow reads and a virtual clock', async () => {
+  let time = 0, reads = 0;
+  assert.equal(await waitForPublished(async timeout => { reads++; time += timeout; return null; }, async ms => { time += ms; }, () => time), null);
+  assert.equal(time, 360000);
+  assert.equal(reads, 18);
+  time = 359999; reads = 0;
+  const start = time;
+  await waitForPublished(async timeout => { reads++; time += timeout; return null; }, async ms => { time += ms + 400000; }, () => time);
+  assert.equal(reads, 1);
+  assert(time - start > 360000); // An oversleep must never cause another request.
+});
+test('registry receipts expose only typed state and closed cache fields', () => {
+  const body = { versions: { [identity.version]: meta }, 'dist-tags': { next: identity.version, latest: '0.1.0-rc.2' } };
+  const expected = { version: identity.version, latest: '0.1.0-rc.2' };
+  const receipt = readbackReceipt(200, new Headers({ 'cache-control': 'public, max-age=300', age: '283', 'cf-cache-status': 'HIT' }), body, expected, 25);
+  assert.deepEqual(receipt, { status: 200, elapsedMs: 25, targetPresent: true, nextMatches: true, latestUnchanged: true, cacheMaxAgeSeconds: 300, cacheAgeSeconds: 283, cacheState: 'HIT' });
+  const canary = 'PM_RELEASE_PRIVATE_CANARY';
+  const hostile = readbackReceipt(canary, new Headers({ 'cache-control': canary, age: canary, 'cf-cache-status': canary, 'set-cookie': canary, authorization: canary }), { error: canary, 'dist-tags': { next: canary, latest: canary } }, expected, NaN);
+  assert(!JSON.stringify(hostile).includes(canary));
+  assert.equal(hostile.status, null);
+  assert.equal(hostile.cacheMaxAgeSeconds, null);
+  assert.equal(hostile.cacheState, null);
+  assert.equal(hostile.targetPresent, false);
+  assert.equal(hostile.nextMatches, false);
+  assert.equal(hostile.latestUnchanged, false);
+});
+test('actual read boundary reports failed responses without echoing body or errors', async () => {
+  const { registryGet } = await import('./release-next.mjs');
+  const originalFetch = globalThis.fetch, originalLog = console.log;
+  const logs = [], canary = 'PM_RELEASE_PRIVATE_CANARY';
+  console.log = value => logs.push(value);
+  try {
+    for (const response of [new Response(JSON.stringify({ error: canary }), { status: 503 }), new Response(canary)]) {
+      globalThis.fetch = async () => response;
+      await assert.rejects(registryGet('https://registry.npmjs.org/pm-server?write=true', false, 1000, { version: identity.version }));
+    }
+    for (const error of [new Error(canary), Object.assign(new Error(canary), { name: 'TimeoutError' })]) {
+      globalThis.fetch = async () => { throw error; };
+      await assert.rejects(registryGet('https://registry.npmjs.org/pm-server?write=true', false, 1000, { version: identity.version }));
+    }
+    assert.equal(logs.length, 4);
+    assert(!logs.join('').includes(canary));
+    assert.equal(JSON.parse(logs[0]).registryRead.status, 503);
+    assert.deepEqual(logs.slice(1).map(value => JSON.parse(value).registryRead.failure), ['invalid-json', 'network', 'timeout']);
+  } finally { globalThis.fetch = originalFetch; console.log = originalLog; }
 });
 test('metadata rejects lifecycle hooks, local origin, dependency changes and latest', () => {
   validatePackage(meta, identity);
@@ -126,7 +172,7 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   assert.equal(result.installedFiles, 4);
   assert.equal(writes, 1);
   assert.equal(dryRuns, 1);
-  assert.deepEqual(visibilityPauses, [5000, 5000]);
+  assert.deepEqual(visibilityPauses, [10000, 10000]);
   assert.equal((await publish(oidcEnv, io)).status, 'already-published');
   assert.equal(writes, 1);
   assert.equal(dryRuns, 1);

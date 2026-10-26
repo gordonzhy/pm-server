@@ -24,16 +24,37 @@ export function sameSource(actual, expected) {
     && Object.keys(actual).length === 3
     && ['repository', 'commit', 'run'].every(key => Object.hasOwn(actual, key) && actual[key] === expected[key]);
 }
-export async function waitForPublished(fetchVersion, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
-  const deadline = Date.now() + 60000;
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const remaining = deadline - Date.now();
+export async function waitForPublished(fetchVersion, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now) {
+  const deadline = now() + 360000;
+  for (let attempt = 0; attempt < 36; attempt++) {
+    const remaining = deadline - now();
     if (remaining <= 0) return null;
     const version = await fetchVersion(Math.min(10000, remaining));
     if (version) return version;
-    if (attempt < 11 && Date.now() < deadline) await pause(Math.min(5000, deadline - Date.now()));
+    if (attempt < 35 && now() < deadline) await pause(Math.min(10000, deadline - now()));
   }
   return null;
+}
+// Only typed fields and closed cache enums may reach public release logs.
+export function readbackReceipt(status, headers, body, expected, elapsedMs) {
+  const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+  const cache = headers.get('cache-control') || '';
+  const directives = cache.split(',').map(value => value.trim().toLowerCase());
+  const ttl = directives.every(value => /^(?:public|private|no-cache|no-store|must-revalidate|max-age=\d{1,8}|s-maxage=\d{1,8})$/.test(value))
+    ? directives.find(value => value.startsWith('max-age='))?.slice(8) : null;
+  const age = headers.get('age') || '';
+  const cacheState = headers.get('cf-cache-status');
+  const selected = body?.versions && Object.hasOwn(body.versions, expected.version) ? body.versions[expected.version] : null;
+  return {
+    status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+    elapsedMs: number(elapsedMs),
+    targetPresent: Boolean(selected),
+    nextMatches: body?.['dist-tags']?.next === expected.version,
+    latestUnchanged: expected.latest === undefined ? null : body?.['dist-tags']?.latest === expected.latest,
+    cacheMaxAgeSeconds: ttl ? Number(ttl) : null,
+    cacheAgeSeconds: /^\d{1,8}$/.test(age) ? Number(age) : null,
+    cacheState: ['HIT', 'MISS', 'DYNAMIC', 'EXPIRED', 'REVALIDATED', 'BYPASS', 'STALE', 'UPDATING'].includes(cacheState) ? cacheState : null,
+  };
 }
 export function assertPublicText(text) {
   // These are generic leak indicators, not an exhaustive privacy audit.

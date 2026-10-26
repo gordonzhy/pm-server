@@ -4,24 +4,34 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { assert, assertPublicText, registry, repository, releaseIdentity, integrity, validatePackage, existingMatches, newerTag, sameSource, waitForPublished } from './release-policy.mjs';
+import { assert, assertPublicText, registry, repository, releaseIdentity, integrity, validatePackage, existingMatches, newerTag, sameSource, waitForPublished, readbackReceipt } from './release-policy.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const npm = (args, options = {}) => execFileSync('npm', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
-async function get(url, allowMissing = false, timeoutMs = 30000) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache', Accept: 'application/json' } });
+export async function registryGet(url, allowMissing = false, timeoutMs = 30000, expected) {
+  const started = Date.now();
+  let response, body;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache', Accept: 'application/json' } });
+    if (expected) body = await response.json();
+  } catch (error) {
+    if (!expected) throw new Error('Release lookup failed');
+    console.log(JSON.stringify({ registryRead: { ...readbackReceipt(response?.status, response?.headers || new Headers(), undefined, expected, Date.now() - started), failure: error.name === 'TimeoutError' ? 'timeout' : response ? 'invalid-json' : 'network' } }));
+    throw new Error('Registry read failed; inspect safe read receipts');
+  }
+  if (expected) console.log(JSON.stringify({ registryRead: readbackReceipt(response.status, response.headers, body, expected, Date.now() - started) }));
   if (allowMissing && response.status === 404) return null;
   assert(response.ok, `Release lookup failed (${response.status})`);
-  return response.json();
+  return expected ? body : response.json();
 }
 async function headIsCurrent(identity) {
-  const head = await get(`https://api.github.com/repos/${repository}/git/ref/heads/main`);
+  const head = await registryGet(`https://api.github.com/repos/${repository}/git/ref/heads/main`);
   return head.object?.sha === identity.source.commit;
 }
-async function registrySnapshot(read, timeout = 30000) {
+async function registrySnapshot(read, timeout = 30000, expected) {
   // npm documents write=true on GET as cache revalidation, not a write action.
-  const snapshot = await read(`${registry}/pm-server?write=true`, false, timeout);
+  const snapshot = await read(`${registry}/pm-server?write=true`, false, timeout, expected);
   assert(snapshot?.name === 'pm-server', 'Registry package identity mismatch');
   assert(snapshot.versions && typeof snapshot.versions === 'object' && !Array.isArray(snapshot.versions), 'Invalid registry versions');
   assert(snapshot['dist-tags'] && typeof snapshot['dist-tags'] === 'object' && !Array.isArray(snapshot['dist-tags']), 'Invalid registry tags');
@@ -76,7 +86,7 @@ export async function prepare(env = process.env) {
   await writeFile(path.join(out, 'candidate.json'), `${JSON.stringify(result, null, 2)}\n`);
   return result;
 }
-const defaultIO = { get, npm, headIsCurrent, fetch: globalThis.fetch };
+const defaultIO = { get: registryGet, npm, headIsCurrent, fetch: globalThis.fetch };
 export async function publish(env = process.env, io = defaultIO) {
   const { get, npm, headIsCurrent, fetch } = io;
   const candidate = await json(path.join(root, '.release/candidate.json'));
@@ -85,7 +95,7 @@ export async function publish(env = process.env, io = defaultIO) {
   const archive = path.join(root, '.release', candidate.filename);
   assert(integrity(await readFile(archive)) === candidate.integrity, 'Candidate archive changed');
   if (!await headIsCurrent(identity)) return { status: 'superseded', version: identity.version };
-  const initial = await registrySnapshot(get);
+  const initial = await registrySnapshot(get, 30000, { version: identity.version });
   const tags = initial['dist-tags'];
   if (newerTag(tags.next, identity)) return { status: 'superseded', version: identity.version };
   const existing = versionIn(initial, identity.version);
@@ -108,7 +118,7 @@ export async function publish(env = process.env, io = defaultIO) {
     } catch { failed = true; }
   }
   const visible = existing ? initial : await waitForPublished(async timeout => {
-    const snapshot = await registrySnapshot(get, timeout);
+    const snapshot = await registrySnapshot(get, timeout, { version: identity.version, latest: tags.latest });
     return versionIn(snapshot, identity.version) ? snapshot : null;
   }, io.pause);
   const published = visible && versionIn(visible, identity.version);
