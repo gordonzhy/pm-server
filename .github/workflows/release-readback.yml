@@ -27,15 +27,17 @@ jobs:
           const hash = value => createHash('sha256').update(value).digest('hex');
           const safeVersion = value => typeof value === 'string' && value.length < 100 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value);
           const home = mkdtempSync(path.join(os.tmpdir(), 'release-readback-'));
-          const config = path.join(home, 'npmrc');
+          const config = path.join(home, 'user.npmrc');
+          const globalConfig = path.join(home, 'global.npmrc');
           writeFileSync(config, '');
+          writeFileSync(globalConfig, '');
           const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'SYSTEMROOT', 'TMPDIR', 'LANG', 'LC_ALL'].includes(key)));
-          Object.assign(env, { HOME: home, NPM_CONFIG_USERCONFIG: config, NPM_CONFIG_GLOBALCONFIG: config, NPM_CONFIG_CACHE: path.join(home, 'cache'), NPM_CONFIG_LOGS_DIR: path.join(home, 'logs') });
+          Object.assign(env, { HOME: home, NPM_CONFIG_USERCONFIG: config, NPM_CONFIG_GLOBALCONFIG: globalConfig, NPM_CONFIG_CACHE: path.join(home, 'cache'), NPM_CONFIG_LOGS_DIR: path.join(home, 'logs') });
           function npmRead(args) {
             try {
               const output = execFileSync('npm', ['view', ...args, '--json', '--prefer-online', '--registry', registry], { env, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
               return { ok: true, value: JSON.parse(output) };
-            } catch { return { ok: false }; }
+            } catch (error) { return { ok: false, exit: Number.isInteger(error.status) ? error.status : null }; }
           }
           const selected = npmRead(['pm-server', 'dist-tags.next']);
           const version = selected.ok && safeVersion(selected.value) ? selected.value : null;
@@ -80,7 +82,7 @@ jobs:
               return { ...base, json: true, packageRecord: Boolean(isPackage), versionCount: isPackage ? Object.keys(value.versions).length : null, selected: record(entry, version), tags: tags ? { next: safeVersion(tags.next) ? tags.next : null, latest: safeVersion(tags.latest) ? tags.latest : null } : null };
             } catch (error) { return { kind, method: 'GET', elapsedMs: Date.now() - started, failed: true, timeout: error.name === 'TimeoutError', credentialsProvided: false }; }
           }
-          const result = { at: new Date().toISOString(), node: process.version, selectedVersionFromNpm: version, permissions: 'read-only; no OIDC request or registry writes', probes: [] };
+          const result = { at: new Date().toISOString(), node: process.version, selectedVersionFromNpm: version, npmSelectionSucceeded: selected.ok, npmSelectionExit: selected.exit ?? 0, permissions: 'read-only; no OIDC request or registry writes', probes: [] };
           if (version) result.npmExact = record(npmRead([`pm-server@${version}`, 'version', 'dist.integrity', 'releaseSource']).value, version);
           for (const [kind, url] of [
             ...(version ? [['version', `${registry}/pm-server/${version}`]] : []),
@@ -89,4 +91,5 @@ jobs:
             ['tags', `${registry}/-/package/pm-server/dist-tags`],
           ]) result.probes.push(await probe(kind, url));
           console.log(JSON.stringify(result, null, 2));
+          if (!version) process.exitCode = 1;
           READBACK_JS
