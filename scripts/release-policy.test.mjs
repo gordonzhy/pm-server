@@ -84,9 +84,17 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   delete oidcEnv.NODE_AUTH_TOKEN; delete oidcEnv.NPM_TOKEN;
   let published = null, writes = 0, dryRuns = 0, visibilityMisses = 2, latest = '0.1.0-rc.2', next = '0.1.0-rc.16';
   const visibilityPauses = [];
+  const registryReads = [];
   const io = {
     headIsCurrent: async () => true,
-    get: async url => url.endsWith('/dist-tags') ? { latest, next } : published && visibilityMisses-- > 0 ? null : published,
+    get: async url => {
+      registryReads.push(url);
+      const uri = new URL(url);
+      assert.equal(uri.pathname, '/pm-server');
+      assert.equal(uri.searchParams.get('write'), 'true');
+      const visible = published && visibilityMisses-- <= 0;
+      return { name: 'pm-server', versions: visible ? { [identity.version]: published } : {}, 'dist-tags': { latest, next } };
+    },
     pause: async ms => visibilityPauses.push(ms),
     npm: (args, options) => {
       if (args[0] === 'pack') return JSON.stringify([first]);
@@ -107,6 +115,8 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   assert.equal((await publish(oidcEnv, io)).status, 'superseded');
   assert.equal(writes, 0);
   next = '0.1.0-rc.16';
+  for (const invalid of [{ name: 'other', versions: {}, 'dist-tags': {} }, { name: 'pm-server', 'dist-tags': {} }, { name: 'pm-server', versions: {}, 'dist-tags': [] }, { name: 'pm-server', versions: { [identity.version]: null }, 'dist-tags': {} }]) await assert.rejects(publish(oidcEnv, { ...io, get: async () => invalid }));
+  assert.equal(writes, 0);
   await assert.rejects(publish({ ...oidcEnv, NPM_TOKEN: 'synthetic' }, io));
   await assert.rejects(publish(oidcEnv, { ...io, npm: () => { throw new Error('simulated transport failure'); } }));
   assert.equal(writes, 0);
@@ -134,6 +144,7 @@ test('real npm pack validates final bytes, deterministic rerun, and rejects an i
   } });
   assert.equal(ambiguous.status, 'published-confirmed-after-cli-error');
   assert.equal(writes, beforeAmbiguousWrite + 1);
+  assert(registryReads.length > 0);
   await writeFile(path.join(root, 'contracts/protocol.json'), 'PM_RELEASE_PRIVATE_CANARY');
   assert.throws(run);
   await writeFile(path.join(root, 'contracts/protocol.json'), '{}');

@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const npm = (args, options = {}) => execFileSync('npm', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 async function get(url, allowMissing = false, timeoutMs = 30000) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache' } });
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache', Accept: 'application/json' } });
   if (allowMissing && response.status === 404) return null;
   assert(response.ok, `Release lookup failed (${response.status})`);
   return response.json();
@@ -18,6 +18,20 @@ async function get(url, allowMissing = false, timeoutMs = 30000) {
 async function headIsCurrent(identity) {
   const head = await get(`https://api.github.com/repos/${repository}/git/ref/heads/main`);
   return head.object?.sha === identity.source.commit;
+}
+async function registrySnapshot(read, timeout = 30000) {
+  // npm documents write=true on GET as cache revalidation, not a write action.
+  const snapshot = await read(`${registry}/pm-server?write=true`, false, timeout);
+  assert(snapshot?.name === 'pm-server', 'Registry package identity mismatch');
+  assert(snapshot.versions && typeof snapshot.versions === 'object' && !Array.isArray(snapshot.versions), 'Invalid registry versions');
+  assert(snapshot['dist-tags'] && typeof snapshot['dist-tags'] === 'object' && !Array.isArray(snapshot['dist-tags']), 'Invalid registry tags');
+  return snapshot;
+}
+function versionIn(snapshot, version) {
+  if (!Object.hasOwn(snapshot.versions, version)) return null;
+  const entry = snapshot.versions[version];
+  assert(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid registry version record');
+  return entry;
 }
 async function filesUnder(rootDir, relative = '') {
   const files = [];
@@ -71,9 +85,10 @@ export async function publish(env = process.env, io = defaultIO) {
   const archive = path.join(root, '.release', candidate.filename);
   assert(integrity(await readFile(archive)) === candidate.integrity, 'Candidate archive changed');
   if (!await headIsCurrent(identity)) return { status: 'superseded', version: identity.version };
-  const tags = await get(`${registry}/-/package/pm-server/dist-tags`);
+  const initial = await registrySnapshot(get);
+  const tags = initial['dist-tags'];
   if (newerTag(tags.next, identity)) return { status: 'superseded', version: identity.version };
-  const existing = await get(`${registry}/pm-server/${identity.version}`, true);
+  const existing = versionIn(initial, identity.version);
   let failed = false;
   if (existing) existingMatches(existing, identity, candidate.integrity);
   else {
@@ -92,10 +107,14 @@ export async function publish(env = process.env, io = defaultIO) {
       npm(['publish', '.', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'next', '--registry', registry]);
     } catch { failed = true; }
   }
-  const published = existing || await waitForPublished(timeout => get(`${registry}/pm-server/${identity.version}`, true, timeout), io.pause);
+  const visible = existing ? initial : await waitForPublished(async timeout => {
+    const snapshot = await registrySnapshot(get, timeout);
+    return versionIn(snapshot, identity.version) ? snapshot : null;
+  }, io.pause);
+  const published = visible && versionIn(visible, identity.version);
   assert(published, failed ? 'Publish failed or outcome unknown; inspect registry before rerun' : 'Published version not yet visible; inspect registry before rerun');
   existingMatches(published, identity, candidate.integrity);
-  const after = await get(`${registry}/-/package/pm-server/dist-tags`);
+  const after = visible['dist-tags'];
   assert(after.latest === tags.latest, 'Latest changed during publication; investigate');
   assert(existing || after.next === identity.version || newerTag(after.next, identity), 'Unexpected next tag');
   const download = await fetch(published.dist.tarball, { signal: AbortSignal.timeout(30000) });
