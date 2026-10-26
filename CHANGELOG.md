@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+GitHub source changes below are not included in the published npm `0.1.0-rc.16` package.
+
+- Add independent, aggregated manager follow-up for awaiting-confirmation tasks, with persistent cooldowns and delivery diagnostics.
+- Add a CI-gated OIDC publishing workflow for unique `next` prereleases, with archive checks and registry installation verification; npm trusted publisher setup is required.
+
 ## 0.1.0-rc.16
 
 - Stream large Hook events while retaining only allowlisted observation metadata.

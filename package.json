@@ -30,6 +30,7 @@
     "scripts/task-monitor-worker.mjs",
     "scripts/testing-dashboard.mjs",
     "scripts/watch-active-tasks.mjs",
+    "scripts/confirmation-watch.mjs",
     "scripts/workbench-auth.mjs",
     "scripts/workbench-data.mjs",
     "scripts/workbench-registry.mjs",
@@ -51,6 +52,8 @@
     "docs/i18n.md",
     "docs/usage.md",
     "docs/usage.zh-CN.md",
+    "docs/continuous-delivery.md",
+    "docs/continuous-delivery.zh-CN.md",
     "lib/setup-wizard.mjs",
     "lib/share-view.mjs"
   ],

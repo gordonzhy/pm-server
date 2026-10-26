@@ -25,6 +25,8 @@ Message delivery requires an [explicitly configured notification backend](docs/u
 
 ## Get started
 
+The awaiting-confirmation reminders described in the [usage guide](docs/usage.md#awaiting-confirmation-follow-up) are an Unreleased GitHub source feature. The published npm `0.1.0-rc.16` package does not include them.
+
 Requires Node.js 22+. Install the preview release:
 
 ```sh
@@ -46,7 +48,7 @@ Use [PM Skill](https://github.com/gordonzhy/pm-skill) to help your assistant pla
 
 ## Learn more
 
-[Setup and usage](docs/usage.md) · [Platform connections](docs/usage.md#connect-a-platform) · [Development](docs/usage.md#development-and-release) · [Changelog](CHANGELOG.md)
+[Setup and usage](docs/usage.md) · [Platform connections](docs/usage.md#connect-a-platform) · [Development](docs/usage.md#development-and-release) · [Continuous delivery](docs/continuous-delivery.md) · [Changelog](CHANGELOG.md)
 
 Codex, Claude Code and DSH can use the common event interface; native integration support varies. See the setup guide for current platform and operating-system coverage.
 

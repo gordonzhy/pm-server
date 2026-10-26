@@ -25,6 +25,8 @@
 
 ## 快速开始
 
+[使用指南](docs/usage.zh-CN.md#待确认任务跟进)中的待确认提醒属于 GitHub Unreleased 源码特性，已发布的 npm `0.1.0-rc.16` 包不包含此功能。
+
 需要 Node.js 22+。安装预发布版本：
 
 ```sh
@@ -46,7 +48,7 @@ pm-server open
 
 ## 进一步了解
 
-[安装与使用](docs/usage.zh-CN.md) · [平台接入](docs/usage.zh-CN.md#平台接入) · [开发](docs/usage.zh-CN.md#开发验证与发布) · [更新记录](CHANGELOG.zh-CN.md)
+[安装与使用](docs/usage.zh-CN.md) · [平台接入](docs/usage.zh-CN.md#平台接入) · [开发](docs/usage.zh-CN.md#开发验证与发布) · [自动发布](docs/continuous-delivery.zh-CN.md) · [更新记录](CHANGELOG.zh-CN.md)
 
 Codex、Claude Code、DSH 可使用统一事件接口，原生接入支持程度不同；当前平台及操作系统范围见使用指南。
 

@@ -95,6 +95,7 @@ async function supervise() {
           health.status = result.status; health.projects = result.projects; health.coverage = result.coverage || health.coverage;
           health.pendingNotifications = result.pendingNotifications || 0;
           health.notificationCheck = result.notificationCheck;
+          health.confirmationWatch = result.confirmationWatch;
           health.lastCheckedAt = result.lastCheckedAt; health.error = result.error;
           health.serviceStatus = result.lastCheckedAt ? 'RUNNING' : 'STARTING';
           save().catch(fatal);

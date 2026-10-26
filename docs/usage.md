@@ -4,6 +4,17 @@ Shares expose de-identified task progress, priorities and dependencies using per
 
 [Product overview](../README.md) · [简体中文](usage.zh-CN.md)
 
+## Awaiting-confirmation follow-up
+
+This is an Unreleased GitHub source feature, absent from the published npm `0.1.0-rc.16` package. Use the reviewed source candidate to try it; installing the existing npm package does not provide it.
+
+The background task monitor separately checks `待确认` tasks in confirmed registered projects, even without active tasks, execution routes or runtime observations. It groups due cards across projects by the current manager in `project-manager.config.json`; old task-row manager routes are not used. No manager produces a diagnostic, not a guessed recipient.
+
+The first reminder is due after one hour (`PROJECT_MANAGER_CONFIRMATION_AFTER`, seconds, minimum 60). Accepted messages repeat after one day (`PROJECT_MANAGER_CONFIRMATION_REPEAT`, minimum 3600). Failed or disabled delivery retries after five minutes (`PROJECT_MANAGER_CONFIRMATION_RETRY`, minimum 60). Each episode allows three fast failed attempts before using the daily repeat interval; accepted delivery resets this budget. Health retains failed/unknown delivery counts during cooldown. Set these environment variables on the monitor process. Missing, invalid or future task timestamps start aging from local first observation. Source row or detail changes and manager changes start a new waiting interval; an observed departure and reentry also starts a new interval. Changes between polls cannot be reconstructed. State is private to the application state directory and survives restart; parallel workers share a delivery lock.
+
+Reminders use a fixed generic message. The manager checks the authorized local workbench or CLI, records who is awaited, the question or evidence, the next action and follow-up time. Backend acceptance does not prove manager handling or host wake-up. This branch never changes task sources, reassigns work, nudges users or resumes paused work. Active-task timed pauses do not mute this separate follow-up; blocked/user-paused tasks are excluded. Removing a project or explicitly stopping the monitor stops its future checks. The service health exposes `confirmationWatch` counts, cooldown, delivery failures and fixed diagnostic codes. An interrupted send is marked `UNKNOWN` and held for the repeat interval before retry; a crash after external acceptance cannot guarantee exactly-once delivery.
+
+
 ## English and Chinese
 
 The login page, workbench, settings, sharing, notifications and task details support **English and Simplified Chinese**. With **System default**, the interface follows the browser's preferred language: Chinese locales select Chinese; other locales use English. Browsers expose their preferred language rather than a separate operating-system language setting.
@@ -14,7 +25,7 @@ Project names, task titles, descriptions, authors, evidence and file paths remai
 
 ## Current release
 
-`0.1.0-rc.4` is a preview release distributed under the `next` tag. Use `npm install -g pm-server@next`, or pin `pm-server@0.1.0-rc.4` for a reproducible installation.
+`0.1.0-rc.16` is the published preview package. Use `npm install -g pm-server@0.1.0-rc.16` for a reproducible installation; `next` follows the registry tag. Unreleased GitHub source changes are separate from this published package.
 
 | Capability | Scope |
 | --- | --- |
@@ -35,7 +46,7 @@ Requires Node.js 22 or later. The server uses Node built-ins and does not requir
 ```sh
 # Build from source (optional)
 npm pack
-npm install -g ./pm-server-0.1.0-rc.4.tgz
+npm install -g ./pm-server-0.1.0-rc.16.tgz
 
 # Install the preview from npm
 npm install -g pm-server@next

@@ -4,9 +4,20 @@
 
 [产品介绍](../README.zh-CN.md) · [English](usage.md)
 
+## 待确认任务跟进
+
+此功能属于 GitHub Unreleased 源码，已发布的 npm `0.1.0-rc.16` 包不包含此功能。试用需使用经审阅的源码候选，安装现有 npm 包不会获得此功能。
+
+后台监测独立巡检已确认登记项目中的 `待确认` 任务，不要求有进行中任务、执行路由或运行观察。按 `project-manager.config.json` 当前登记经理跨项目合并到期卡片，不使用任务行中的旧经理路由；无经理时报告诊断，不猜收件人。
+
+默认首次一小时后提醒（`PROJECT_MANAGER_CONFIRMATION_AFTER`，秒，最小60），接受后一天再提醒（`PROJECT_MANAGER_CONFIRMATION_REPEAT`，最小3600），失败或停用后五分钟重试（`PROJECT_MANAGER_CONFIRMATION_RETRY`，最小60）。每代最多三次快速失败尝试，之后使用每日重复间隔；接受后重置该预算。冷却期间健康仍保留失败与未知投递计数。变量配置在监测进程环境。缺失、坏或未来时间从本机首次发现计时；任务行、详情或经理变化，以及观察到离开后重入，开启新等待间隔。两次巡检之间的变化无法重建。私有应用状态持久保存冷却，并以投递锁防并行重复。
+
+通知采用固定通用正文，经理通过授权本机工作台或 CLI 核对等待谁、问题或证据、确认后动作和跟进时点。后端接受不代表经理已处理或真实宿主唤醒；不改任务真源、不重派、不自动催用户或恢复暂停。活动任务的限时监测暂停不静音此独立分支，受阻及用户暂停任务不纳入。移除项目或明确停止监测后不再巡检。服务健康中的 `confirmationWatch` 显示覆盖数量、冷却、失败及固定诊断码。发送中断保留 `UNKNOWN` 并等待重复间隔；外部已接受后进程崩溃不保证严格只发送一次。
+
+
 ## 当前版本
 
-`0.1.0-rc.4` 为 `next` 标签下的预发布版本。使用 `npm install -g pm-server@next`，也可固定 `pm-server@0.1.0-rc.4` 以便复现。
+`0.1.0-rc.16` 为已发布的预发布包。使用 `npm install -g pm-server@0.1.0-rc.16` 固定版本以便复现；`next` 跟随注册表标签。GitHub Unreleased 源码改动与该已发布包分开。
 
 | 能力 | 范围 |
 | --- | --- |
@@ -27,7 +38,7 @@
 ```sh
 # 可选：从源码目录生成 tarball 并安装
 npm pack
-npm install -g ./pm-server-0.1.0-rc.4.tgz
+npm install -g ./pm-server-0.1.0-rc.16.tgz
 
 # 从 npm 安装预发布版
 npm install -g pm-server@next

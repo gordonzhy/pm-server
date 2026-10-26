@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 独立于工作台页面的用户级监测循环，仅检查已确认登记项目。
+import {watchConfirmations} from './confirmation-watch.mjs';
 import {recoverCodexRuntime} from '../lib/codex-runtime-observer.mjs';
 import {runtimeCsv} from '../lib/paths.mjs';
 import { spawn } from 'node:child_process';
@@ -61,6 +62,9 @@ try {
     health.status = 'CHECKING'; await save();
     try {
       const state = await registry.read(), results = [];
+      progress('confirmation-check',50000);
+      try{health.confirmationWatch=await watchConfirmations({directory,onProgress:()=>progress('confirmation-delivery',50000)});}
+      catch{health.confirmationWatch={state:'ERROR',diagnostics:['CONFIRMATION_CHECK_UNAVAILABLE']};}
       progress('notification-check',50000);
       const snapshots=[];
       for(const project of state.projects){try{snapshots.push(await inspectProject(project,false));}catch{}}
@@ -80,7 +84,7 @@ try {
       health.observationDiagnosticCount=results.reduce((n,r)=>n+(r.observationDiagnosticCount||0),0);
       health.observationCoverage=health.observationDiagnosticCount?'PARTIAL':'AVAILABLE';
       health.pendingNotifications = results.reduce((sum, result) => sum + (result.pendingNotifications || 0), 0);
-      health.status = results.some(result => result.status === 'ERROR') ? 'ERROR' : results.some(result => result.status === 'WARNING')||['FAILED','UNKNOWN'].includes(health.notificationCheck?.state) ? 'WARNING' : 'HEALTHY';
+      health.status = results.some(result => result.status === 'ERROR') ? 'ERROR' : results.some(result => result.status === 'WARNING')||['WARNING','ERROR'].includes(health.confirmationWatch?.state)||['FAILED','UNKNOWN'].includes(health.notificationCheck?.state) ? 'WARNING' : 'HEALTHY';
       delete health.error;
     } catch (error) {health.status = 'ERROR'; health.error = error.message; await save(); throw error;}
     health.lastCheckedAt = new Date().toISOString();
