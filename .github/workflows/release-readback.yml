@@ -1,0 +1,92 @@
+name: Read-only release readback
+on:
+  push:
+    branches: [diagnostics/release-readback]
+permissions:
+  contents: read
+jobs:
+  registry-readback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.16.0 --ignore-scripts --no-audit --no-fund
+      - name: Compare anonymous registry readbacks
+        shell: bash
+        run: |
+          node --input-type=module <<'READBACK_JS'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { mkdtempSync, writeFileSync } from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          
+          const registry = 'https://registry.npmjs.org';
+          const hash = value => createHash('sha256').update(value).digest('hex');
+          const safeVersion = value => typeof value === 'string' && value.length < 100 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value);
+          const home = mkdtempSync(path.join(os.tmpdir(), 'release-readback-'));
+          const config = path.join(home, 'npmrc');
+          writeFileSync(config, '');
+          const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['PATH', 'SYSTEMROOT', 'TMPDIR', 'LANG', 'LC_ALL'].includes(key)));
+          Object.assign(env, { HOME: home, NPM_CONFIG_USERCONFIG: config, NPM_CONFIG_GLOBALCONFIG: config, NPM_CONFIG_CACHE: path.join(home, 'cache'), NPM_CONFIG_LOGS_DIR: path.join(home, 'logs') });
+          function npmRead(args) {
+            try {
+              const output = execFileSync('npm', ['view', ...args, '--json', '--prefer-online', '--registry', registry], { env, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+              return { ok: true, value: JSON.parse(output) };
+            } catch { return { ok: false }; }
+          }
+          const selected = npmRead(['pm-server', 'dist-tags.next']);
+          const version = selected.ok && safeVersion(selected.value) ? selected.value : null;
+          function record(entry, expected) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { present: false };
+            const source = entry.releaseSource;
+            const exactKeys = source && typeof source === 'object' && !Array.isArray(source) && Object.keys(source).length === 3 && ['repository', 'commit', 'run'].every(key => Object.hasOwn(source, key));
+            const sourceShape = Boolean(exactKeys && source.repository === 'gordonzhy/pm-server' && typeof source.commit === 'string' && /^[a-f0-9]{40}$/.test(source.commit) && typeof source.run === 'string' && /^[1-9][0-9]*$/.test(source.run));
+            const integrity = entry.dist?.integrity ?? entry['dist.integrity'];
+            return {
+              present: true,
+              nameMatches: entry.name === undefined || entry.name === 'pm-server',
+              version: safeVersion(entry.version) ? entry.version : null,
+              versionMatches: entry.version === expected,
+              integrity: typeof integrity === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity) ? integrity : null,
+              sourceShape,
+              sourceValuesSha256: sourceShape ? hash(JSON.stringify({ repository: source.repository, commit: source.commit, run: source.run })) : null,
+            };
+          }
+          function headers(response) {
+            const result = {};
+            for (const key of ['cache-control', 'age', 'cf-cache-status', 'content-type', 'etag']) {
+              const value = response.headers.get(key);
+              if (!value) continue;
+              const valid = key === 'etag' ? /^(?:W\/)?"[a-fA-F0-9]{16,128}"$/.test(value) : /^[A-Za-z0-9 ,;=._/-]{1,160}$/.test(value);
+              result[key] = valid ? value : 'present-unreported';
+            }
+            return result;
+          }
+          async function probe(kind, url) {
+            const started = Date.now();
+            try {
+              const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'pm-server-release', 'Cache-Control': 'no-cache', Accept: 'application/json' } });
+              const bytes = Buffer.from(await response.arrayBuffer());
+              const base = { kind, method: 'GET', status: response.status, elapsedMs: Date.now() - started, headers: headers(response), bytes: bytes.length, bodySha256: hash(bytes), credentialsProvided: false };
+              if (bytes.length > 4 * 1024 * 1024) return { ...base, bodyOverLimit: true };
+              let value;
+              try { value = JSON.parse(bytes.toString('utf8')); } catch { return { ...base, json: false }; }
+              const isPackage = value?.name === 'pm-server' && value.versions && typeof value.versions === 'object';
+              const entry = isPackage && version ? value.versions[version] : kind === 'version' ? value : null;
+              const tags = isPackage ? value['dist-tags'] : kind === 'tags' ? value : null;
+              return { ...base, json: true, packageRecord: Boolean(isPackage), versionCount: isPackage ? Object.keys(value.versions).length : null, selected: record(entry, version), tags: tags ? { next: safeVersion(tags.next) ? tags.next : null, latest: safeVersion(tags.latest) ? tags.latest : null } : null };
+            } catch (error) { return { kind, method: 'GET', elapsedMs: Date.now() - started, failed: true, timeout: error.name === 'TimeoutError', credentialsProvided: false }; }
+          }
+          const result = { at: new Date().toISOString(), node: process.version, selectedVersionFromNpm: version, permissions: 'read-only; no OIDC request or registry writes', probes: [] };
+          if (version) result.npmExact = record(npmRead([`pm-server@${version}`, 'version', 'dist.integrity', 'releaseSource']).value, version);
+          for (const [kind, url] of [
+            ...(version ? [['version', `${registry}/pm-server/${version}`]] : []),
+            ['packument', `${registry}/pm-server`],
+            ['revalidated-packument', `${registry}/pm-server?write=true`],
+            ['tags', `${registry}/-/package/pm-server/dist-tags`],
+          ]) result.probes.push(await probe(kind, url));
+          console.log(JSON.stringify(result, null, 2));
+          READBACK_JS
