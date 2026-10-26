@@ -2,6 +2,8 @@
 
 `check.yml` 对 push 和 pull request 运行 macOS Node 22、24 测试矩阵。只有本仓库 `main` 分支的 push 且两项测试全部成功，才运行下游 Ubuntu 发布 job。npm 还必须配置匹配的可信发布关系；仅提交 workflow 不代表已接通认证。
 
+测试矩阵使用标准 macOS Intel runner（`macos-26-intel`），这次 CI 不代表 ARM64 宿主验证。
+
 发布使用 GitHub Actions OIDC，仅发布 job 有 `contents: read` 和 `id-token: write`，无需 npm token secret。npm 包 `pm-server` 的可信来源应为 GitHub owner `gordonzhy`、仓库 `pm-server`、workflow 文件 `check.yml`、environment `npm-next`，开启直接发布能力，并保留下文所述的平台固定暂存权限。GitHub 的该 environment 必须使用自定义分支策略，仅允许 `main` 分支部署，不配置 tag 规则；分支限制属于安全边界，只有 workflow 条件不足以替代。不要增加无关操作或修改账号整体认证设置。使用 GitHub-hosted runner、Node 24 和 npm 11.16.0。参阅 [npm 官方可信发布说明](https://docs.npmjs.com/trusted-publishers/)。
 
 npm 新建可信关系固定包含暂存发布权限，开启直接发布后的有效组合为 `createPackage` 与 `createStagedPackage`，仍只限上述包及 workflow 范围；不要授予 `manageDistTags`。本 workflow 只直接发布到 `next`，不提交或批准暂存包。暂存包转为公开版本仍需维护者审核及 2FA 批准。平台固定的暂存权限无法从新建直接发布关系中移除。

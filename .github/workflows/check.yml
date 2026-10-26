@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     strategy:
       matrix:
         node: [22, 24]
