@@ -53,3 +53,5 @@ Use [PM Skill](https://github.com/gordonzhy/pm-skill) to help your assistant pla
 Codex, Claude Code and DSH can use the common event interface; native integration support varies. See the setup guide for current platform and operating-system coverage.
 
 [MIT License](LICENSE)
+
+See [GitHub operations](docs/github-operations.md) for hourly issue acknowledgement, the maintainer queue and Actions failure tracking.

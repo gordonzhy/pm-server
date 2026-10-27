@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded hourly GitHub issue acknowledgement and a persistent maintainer queue for Actions failures and PR approval attention.
+
 GitHub source changes below are not included in the published npm `0.1.0-rc.16` package.
 
 - Add independent, aggregated manager follow-up for awaiting-confirmation tasks, with persistent cooldowns and delivery diagnostics.

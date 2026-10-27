@@ -53,3 +53,5 @@ pm-server open
 Codex、Claude Code、DSH 可使用统一事件接口，原生接入支持程度不同；当前平台及操作系统范围见使用指南。
 
 [MIT License](LICENSE)
+
+每小时 issue 受理、维护者队列与 Actions 失败跟踪见 [GitHub 运营巡检](docs/github-operations.zh-CN.md)。
