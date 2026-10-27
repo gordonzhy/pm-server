@@ -26,6 +26,8 @@ async function fixture(t) {
   }
   const registry = {version: 1, revision: 1, projects, pending: [], removed: []};
   await writeFile(path.join(state, 'registry.json'), JSON.stringify(registry));
+  await mkdir(path.join(state,'monitor'));
+  for(const project of projects){const i=projects.indexOf(project),scope=JSON.stringify(['dispatch-'+i,execution,'','codex:default:'+manager]);await writeFile(path.join(state,'monitor',createHash('sha256').update(project.root).digest('hex')+'.json'),JSON.stringify({version:1,tasks:{['TEST-'+i]:{scope,reminders:{recovery:{generation:'fixture',attempts:0,queuedAt:Date.parse(now)-600001,nextAt:0}}}}}));}
   const env = {...process.env, CODEX_HOME: path.join(root, 'codex-home'), CODEX_SESSION_RUNTIME_CSV: cache, PROJECT_MANAGER_CODEX_BIN: fake, PROJECT_MANAGER_QUEUE_LOG: queue};
   t.after(async () => {
     try { execFileSync(process.execPath, [path.join(scripts, 'manage-task-monitor.mjs'), '--state-dir', state, '--stop'], {env, stdio: 'pipe'}); } catch {}
@@ -100,7 +102,7 @@ test('supervisor recovers crashed and frozen workers without duplicate reminders
   process.kill(recovered.workerPid, 'SIGSTOP');
   const resumed = await waitFor(fx, health => health.ready && health.restartCount === 2, 16000);
   assert.notEqual(resumed.workerPid, recovered.workerPid);
-  assert.equal((await readFile(fx.queue, 'utf8')).split('PROJECT_MANAGER_RECONCILIATION').length - 1, 2);
+  assert.equal((await readFile(fx.queue, 'utf8')).split('PROJECT_MANAGER_RECONCILIATION').length - 1, 1);
   assert.match(await readFile(path.join(fx.state, 'task-monitor-events.jsonl'), 'utf8'), /worker progress timeout/);
   fx.run('manage-task-monitor.mjs', ['--stop']);
   assert.equal(JSON.parse(fx.run('manage-task-monitor.mjs', ['--ensure'])).state, 'DISABLED');
@@ -159,7 +161,7 @@ test('malformed individual registration is an isolated error rather than a globa
   assert.equal(health.serviceStatus, 'RUNNING'); assert.equal(health.restartCount, 0);
 });
 
-test('crashed in-flight delivery remains visible and retries after its short lease, independent of warning dedup', async t => {
+test('crashed in-flight delivery remains visible and retries after its shared ten-minute reservation', async t => {
   const fx = await fixture(t);
   fx.registry.projects = fx.registry.projects.slice(0, 1);
   await writeFile(path.join(fx.state, 'registry.json'), JSON.stringify(fx.registry));
@@ -181,7 +183,8 @@ test('crashed in-flight delivery remains visible and retries after its short lea
   assert.equal(await readFile(fx.queue, 'utf8'), '.start\n');
   const csv = fx.registry.projects[0].csvPath;
   const statePath=path.join(fx.state,'monitor',createHash('sha256').update(fx.registry.projects[0].root).digest('hex')+'.json');
-  const saved=JSON.parse(await readFile(statePath,'utf8'));saved.tasks['TEST-0'].recovery_state_at=new Date(Date.now()-61000).toISOString();await writeFile(statePath,JSON.stringify(saved));
+  const gatePath=path.join(fx.state,'reminder-delivery',createHash('sha256').update('codex:default:'+manager).digest('hex')+'.json');const gate=JSON.parse(await readFile(gatePath,'utf8'));assert.ok(gate.nextAt-Date.now()>590000);gate.nextAt=Date.now()-1;await writeFile(gatePath,JSON.stringify(gate));
+  const saved=JSON.parse(await readFile(statePath,'utf8'));saved.tasks['TEST-0'].reminders.recovery.nextAt=0;await writeFile(statePath,JSON.stringify(saved));
   const retried = await waitFor(fx, result => result.status === 'HEALTHY' && result.pendingNotifications === 0);
   assert.equal(retried.restartCount, 1);
   assert.equal(await readFile(fx.queue,'utf8'), '.start\n.delivered\n');
@@ -233,6 +236,7 @@ test('missing observations stay diagnostic without recurring messages, while kno
  await assert.rejects(readFile(f.queue),e=>e.code==='ENOENT');
  const now=new Date().toISOString(),old=new Date(Date.now()-300000).toISOString();
  await writeFile(cache,`session_id,status,current_turn_id,status_at,last_seen_at\n${execution},interrupted,turn-1,${old},${now}\n`);
+ const statePath=path.join(f.state,'monitor',createHash('sha256').update(project.root).digest('hex')+'.json');await writeFile(statePath,JSON.stringify({version:1,tasks:{'TEST-0':{scope:JSON.stringify(['dispatch-0',execution,'','codex:default:'+manager,'codex:default:'+current]),reminders:{recovery:{generation:'fixture',attempts:0,queuedAt:Date.now()-600001,nextAt:0}}}}}));
  f.run('watch-active-tasks.mjs',['--repo',project.root]);
  const sent=await readFile(f.queue,'utf8');assert.ok(sent.includes(current));assert.ok(!sent.includes(manager));
  const rows=await readFile(path.join(project.root,'TASKS.csv'),'utf8');assert.ok(rows.includes(manager));assert.ok(!rows.includes(current));

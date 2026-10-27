@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile, symlink, rm, realpath } from "node:fs/promises";
@@ -69,6 +70,8 @@ test("foreground runner records an action only when recovery is sent", async () 
   const now = new Date(Date.now() - 2 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
   await writeFile(path.join(fx.repo, "TASKS.csv"), `id,status,priority,boundary,title,dependencies,executor,created_at,modified_at,detail_path,dispatch_id,execution_thread_id,execution_turn_id,manager_thread_id,manager_turn_id,recovery_turn_id,recovery_state,recovery_state_at\nTEST-001,进行中,P0,Test,Test,[],AI,2026-01-01T00:00:00+08:00,2026-01-01T00:00:00+08:00,test.md,dispatch-test,${execution},turn-1,${manager},manager-turn,,,\n`);
   await writeFile(fx.env.CODEX_SESSION_RUNTIME_CSV, `session_id,name,status,current_turn_id,status_at,last_seen_at\n${execution},Execution,idle,turn-1,${now},${now}\n${manager},Manager,idle,manager-turn,${now},${now}\n`);
+  await mkdir(path.join(fx.env.PM_SERVER_STATE_DIR,'monitor'),{recursive:true});
+  await writeFile(path.join(fx.env.PM_SERVER_STATE_DIR,'monitor',createHash('sha256').update(fx.repo).digest('hex')+'.json'),JSON.stringify({version:1,tasks:{'TEST-001':{scope:JSON.stringify(['dispatch-test',execution,'','codex:default:'+manager]),reminders:{recovery:{generation:'fixture',attempts:0,queuedAt:Date.now()-600001,nextAt:0}}}}}));
   const output = execFileSync(process.execPath, [runner, "--repo", fx.repo, "--once"], {
     env: { ...fx.env, PROJECT_MANAGER_FORCE_TTY: "1" },
     encoding: "utf8",

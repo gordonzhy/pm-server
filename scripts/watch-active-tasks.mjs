@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {codexReference,runtimeEvidence,cachedRuntimeSession} from '../lib/codex-runtime-observer.mjs';
+import {deliverReminder} from '../lib/reminder-delivery.mjs';
 import { createHash } from "node:crypto";
 import { readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -81,7 +82,7 @@ function warning(message) {
 }
 
 function recoveryGeneration(row, column, execution) {
-  const turn = execution?.turnId || row[column.execution_turn_id] || row[column.dispatch_id];
+  const turn = 'business-event';
   return `recovery:${createHash('sha256').update(JSON.stringify([row[column.dispatch_id], row[column.execution_thread_id], turn,effectiveManager(row,column)])).digest('hex').slice(0, 16)}`;
 }
 
@@ -170,15 +171,14 @@ function inspect(rows, sessions, now, runtimeError = "",runtimeMissing=false) {
     const execution = resolveSession(row[column.execution_thread_id], "execution", taskId);
     if (execution && effectiveManager(row,column)) usable.set(taskId, { execution });
     // A return to activity ends the previous inactive episode, even in the same turn.
-    if (execution && ['running', 'waiting'].includes(execution.status) && row[column.recovery_state]) resetNotification(row);
+    // Ordinary activity does not resolve an unhandled business event.
   }
   const candidates = active.filter((row) => {
     const runtime = usable.get(row[column.id]);
     if (!runtime) return false;
     if (["running", "waiting"].includes(runtime.execution.status)) return false;
     const generation = recoveryGeneration(row, column, runtime.execution);
-    const deduped = row[column.recovery_turn_id] === generation && (row[column.recovery_state] === 'sent'
-      || (row[column.recovery_state] === 'pending' && ageSeconds(row[column.recovery_state_at], now) < pendingLeaseSeconds));
+    const deduped = false; // Persisted business-event policy below owns deduplication/backoff.
     return ageSeconds(runtime.execution.statusAt, now) >= graceSeconds && !deduped;
   });
   const warningCandidates = manager ? active.flatMap((row) => {
@@ -187,7 +187,7 @@ function inspect(rows, sessions, now, runtimeError = "",runtimeMissing=false) {
     const generation = `warning:${createHash("sha256").update(JSON.stringify({ dispatch: row[column.dispatch_id], execution: row[column.execution_thread_id], manager, reasons })).digest("hex").slice(0, 16)}`;
     const same = row[column.recovery_turn_id] === generation;
     // Legacy permanent mutes expire after one hour; new pauses require a reason and deadline.
-    if (same && ageSeconds(row[column.recovery_state_at], now) < (row[column.recovery_state] === "pending" ? pendingLeaseSeconds : warningIntervalSeconds) && ["warning-sent", "pending", "warning-muted"].includes(row[column.recovery_state])) return [];
+    // Persisted business-event policy below owns warning cooling.
     return [{ row, generation, reasons }];
   }) : [];
   return { column, active, manager, candidates, warningCandidates, usable, changed, warnings,diagnostics };
@@ -204,18 +204,18 @@ async function mutate(action) {
     for(const field of runtimeFields)if(!headers.includes(field)){headers.push(field);for(const row of rows.slice(1))row.push('');}
     const col=Object.fromEntries(headers.map((h,i)=>[h,i]));
     let saved={version:1,tasks:{}};
-    try{saved=JSON.parse(await readFile(monitorFile,'utf8'));if(saved.version!==1||!saved.tasks)throw new Error('invalid monitor snapshot');}catch(e){if(e.code!=='ENOENT')throw e;}
+    try{saved=JSON.parse(await readFile(monitorFile,'utf8'));if(saved.version!==1||!saved.tasks||typeof saved.tasks!=='object'||Array.isArray(saved.tasks))throw new Error('invalid monitor snapshot');}catch(e){if(e.code!=='ENOENT')throw e;}
     const scope=row=>monitorScope(Object.fromEntries(headers.map((h,i)=>[h,row[i]])),projectManager);
     let invalidated=false;
     for(const row of rows.slice(1)){
       const old=saved.tasks[row[col.id]],same=monitorScopeMatches(old?.scope,Object.fromEntries(headers.map((h,i)=>[h,row[i]])),projectManager);
-      if(old&&!same&&runtimeFields.some(field=>old[field]))invalidated=true;
+      if(old&&!same&&(runtimeFields.some(field=>old[field])||old.checkpoint||old.reminders))invalidated=true;
       for(const field of runtimeFields)row[col[field]]=same?old[field]||'':'';
     }
-    const result=await action(rows);
+    const result=await action(rows,saved);
     result.changed ||= invalidated;
     if(result.changed){
-      const tasks=Object.fromEntries(rows.slice(1).map(row=>[row[col.id],{scope:scope(row),...Object.fromEntries(runtimeFields.map(h=>[h,row[col[h]]]))}]));
+      const tasks=Object.fromEntries(rows.slice(1).map(row=>[row[col.id],{...((monitorScopeMatches(saved.tasks[row[col.id]]?.scope,Object.fromEntries(headers.map((h,i)=>[h,row[i]])),projectManager))?saved.tasks[row[col.id]]:{}),scope:scope(row),...Object.fromEntries(runtimeFields.map(h=>[h,row[col[h]]]))}]));
       const temporary=monitorFile+'.'+process.pid+'.tmp';
       await writeFile(temporary,JSON.stringify({version:1,tasks})+'\n',{mode:0o600});await rename(temporary,monitorFile);
     }
@@ -224,95 +224,60 @@ async function mutate(action) {
 }
 
 const runtime = await readRuntimeCache();
-const claimed = await mutate((rows) => {
-  const result = inspect(rows, runtime.sessions || new Map(), Date.now(), runtime.error || "",runtime.errorKind==='MISSING');
-  const now = new Date().toISOString();
-  for (const row of result.candidates) {
-    const generation = recoveryGeneration(row, result.column, result.usable.get(row[result.column.id])?.execution);
-    row[result.column.recovery_turn_id] = generation;
-    row[result.column.recovery_state] = "pending";
-    row[result.column.recovery_state_at] = now;
-    row[result.column.modified_at] = now;
-    result.changed = true;
+const observedAt=Date.now();
+const summary={state:'CHECKED',policyVersion:1,minimumBatchSeconds:600,tasks:[]};
+await mutate(async(rows,saved)=>{
+ const result=inspect(rows,runtime.sessions||new Map(),observedAt,runtime.error||'',runtime.errorKind==='MISSING');
+ const col=result.column;
+ for(const message of result.warnings)warning(message);
+ if(result.diagnostics.length)console.log(`CODEX_PM_DIAGNOSTIC observation_coverage ${result.diagnostics.length}`);
+ const candidates=new Map(result.candidates.map(row=>[row[col.id],{row,kind:'recovery',generation:recoveryGeneration(row,col)}]));
+ for(const item of result.warningCandidates)candidates.set(item.row[col.id],{...item,kind:'warning'});
+ for(const row of rows.slice(1)){
+  const task=Object.fromEntries(rows[0].map((h,i)=>[h,row[i]])),id=task.id;
+  const same=monitorScopeMatches(saved.tasks[id]?.scope,task,projectManager);
+  const item=same?saved.tasks[id]:{scope:monitorScope(task,projectManager)};
+  saved.tasks[id]=item;
+  if(task.status!=='进行中'){if(item.reminders||item.checkpoint){delete item.reminders;delete item.checkpoint;result.changed=true;}continue;}
+  const candidate=candidates.get(id);
+  if(!candidate)continue; // Continue inspecting even while a checkpoint suppresses delivery.
+  const manager=effectiveManager(row,col);if(!manager)continue;
+  const checkpoint=item.checkpoint;
+  if(checkpoint){
+   if(!Number.isFinite(checkpoint.until)||!Number.isFinite(checkpoint.createdAt)||!checkpoint.reason||checkpoint.until-checkpoint.createdAt>86400000)throw new Error('INVALID_CHECKPOINT_STATE');
+   if(checkpoint.createdAt>observedAt){checkpoint.createdAt=observedAt;checkpoint.until=Math.min(checkpoint.until,observedAt+86400000);result.changed=true;}
+   if(checkpoint.until>observedAt){summary.tasks.push({task:id,state:'PROCESSING',nextCheckAt:new Date(checkpoint.until).toISOString()});continue;}
+   delete item.checkpoint;item.reminders={};result.changed=true;
   }
-  for (const item of result.warningCandidates) {
-    item.row[result.column.recovery_turn_id] = item.generation;
-    item.row[result.column.recovery_state] = "pending";
-    item.row[result.column.recovery_state_at] = now;
-    item.row[result.column.modified_at] = now;
-    result.changed = true;
+  const migrating=!item.reminders;
+  item.reminders||={};
+  let event=item.reminders[candidate.kind];
+  if(!event){
+   // Conservatively inherit an old private receipt rather than fan out on upgrade.
+   const legacy=Date.parse(task.recovery_state_at);
+   const oldReceipt=migrating&&(candidate.kind==='warning'?['warning-sent','pending','warning-muted']:['sent','pending']).includes(task.recovery_state)&&Number.isFinite(legacy);
+   event={generation:candidate.generation,attempts:0,queuedAt:observedAt,nextAt:oldReceipt?Math.max(observedAt+600000,legacy+3600000):observedAt};
+   item.reminders[candidate.kind]=event;result.changed=true;
   }
-  return { ...result,
-    tasks: result.candidates.map((row) => ({ id: row[result.column.id], dispatch: row[result.column.dispatch_id], execution: row[result.column.execution_thread_id], manager: effectiveManager(row,result.column), claimedAt: row[result.column.recovery_state_at], generation: recoveryGeneration(row, result.column, result.usable.get(row[result.column.id])?.execution) })),
-    warningTasks: result.warningCandidates.map((item) => ({ id: item.row[result.column.id], dispatch: item.row[result.column.dispatch_id], execution: item.row[result.column.execution_thread_id], manager: effectiveManager(item.row,result.column), claimedAt: item.row[result.column.recovery_state_at], generation: item.generation, reasons: item.reasons })),
-  };
+  if(!Number.isFinite(event.queuedAt)||!Number.isFinite(event.nextAt)||!Number.isInteger(event.attempts)||event.attempts<0)throw new Error('INVALID_REMINDER_STATE');
+  if(event.checkedAt>observedAt){event.queuedAt=observedAt;event.nextAt=observedAt+600000;result.changed=true;}
+  event.checkedAt=observedAt;
+  if(observedAt<event.nextAt){summary.tasks.push({task:id,kind:candidate.kind,state:'COOLING',nextCheckAt:new Date(event.nextAt).toISOString()});continue;}
+  const receipt=await deliverReminder({directory:args.get('--state-dir')||stateDir(),manager,queuedAt:event.queuedAt,now:observedAt});
+  event.delivery=receipt.deliveryState||receipt.state;
+  if(receipt.state==='ACCEPTED'){
+   event.attempts=Math.min(event.attempts+1,6);event.lastAcceptedAt=receipt.acceptedAt;
+   event.nextAt=observedAt+Math.min(3600000*2**(event.attempts-1),86400000);
+   event.queuedAt=event.nextAt; // A future due event joins the next batching window.
+   row[col.recovery_state]=candidate.kind==='warning'?'warning-sent':'sent';row[col.recovery_turn_id]=candidate.generation;row[col.recovery_state_at]=new Date(observedAt).toISOString();
+   if(process.env.CODEX_PM_REPORT_ACTION==='1'&&!receipt.coveredByBatch)console.log(`CODEX_PM_ACTION reconciliation-sent 1`);
+  }else {event.nextAt=receipt.nextAt;if(receipt.state==='CLOCK_REBASED')event.queuedAt=observedAt;}
+  summary.tasks.push({task:id,kind:candidate.kind,state:receipt.state,nextCheckAt:new Date(event.nextAt).toISOString()});result.changed=true;
+ }
+ const pending=Object.values(saved.tasks).flatMap(t=>Object.values(t.reminders||{})).filter(e=>['FAILED','UNKNOWN'].includes(e.delivery)).length;
+ if(process.env.CODEX_PM_REPORT_ACTION==='1')console.log('CODEX_PM_PENDING '+pending);
+ if(pending)process.exitCode=3;
+ console.log('CODEX_PM_REMINDERS '+JSON.stringify(summary));
+ if(result.warnings.length||runtime.error&&runtime.errorKind!=='MISSING')process.exitCode=3;
+ return result;
 });
-
-async function reportPending() {
-  let saved;try{saved=JSON.parse(await readFile(monitorFile,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
-  const pending=Object.values(saved?.tasks||{}).filter(t=>t.recovery_state==='pending').length;
-  if(process.env.CODEX_PM_REPORT_ACTION==='1')console.log(`CODEX_PM_PENDING ${pending}`);
-  return pending;
-}
-
-if(claimed.diagnostics.length)console.log(`CODEX_PM_DIAGNOSTIC observation_coverage ${claimed.diagnostics.length}`);
-for (const message of claimed.warnings) warning(message);
-if (runtime.error && runtime.errorKind!=='MISSING' && !claimed.warnings.length) warning(runtime.error);
-if (!claimed.tasks.length && !claimed.warningTasks.length) {
-  const pending = await reportPending();
-  if (pending) warning(`${pending} notification(s) await confirmation; pending lease ${pendingLeaseSeconds}s`);
-  process.exit(claimed.warnings.length || runtime.error&&runtime.errorKind!=='MISSING' || pending ? 3 : 0);
-}
-if (!claimed.manager) { warning("active task has no manager_thread_id; cannot notify manager"); process.exit(3); }
-
-async function deliver(kind, tasks, messageFor, successState) {
-  if (!tasks.length) return true;
-  // 重新核对 claim 身份；锁贯穿外部排队和确认，避免路由变更后向旧经理发送。
-  const result = await mutate(async rows => {
-    const col = Object.fromEntries(rows[0].map((field, index) => [field, index]));
-    const latestConfig=await loadProjectConfig(repository);
-    if(!latestConfig.ok|| (latestConfig.config.manager?registeredManagerReference(latestConfig.config.manager.threadId):null)!==projectManager)return {changed:false,sent:true,count:0};
-    const eligible = tasks.flatMap(task => {
-      const row = rows.slice(1).find(item => item[col.id] === task.id);
-      if (!row || row[col.status] !== '进行中' || row[col.dispatch_id] !== task.dispatch
-          || row[col.execution_thread_id] !== task.execution || effectiveManager(row,col) !== claimed.manager
-          || row[col.recovery_turn_id] !== task.generation || row[col.recovery_state] !== 'pending'
-          || row[col.recovery_state_at] !== task.claimedAt) return [];
-      const currentTask = Object.fromEntries(rows[0].map((field, i) => [field, row[i]]));
-      if (inspectPause(currentTask, runtime.sessions?.get(task.execution)?.turnId).paused) return [];
-      return [{task, row}];
-    });
-    if (!eligible.length) return {changed: false, sent: true, count: 0};
-    let sent = false;
-    if (notifyDisabled) {
-      console.warn(`WARNING: manager notification delivery disabled; ${eligible.length} ${kind} reminder(s) were not delivered and remain unconfirmed. Configure PROJECT_MANAGER_NOTIFY_BIN/PROJECT_MANAGER_NOTIFY_ARGS, or an explicitly configured PROJECT_MANAGER_CODEX_BIN for a verified legacy backend.`);
-    } else {
-      const message = messageFor(eligible.map(item => item.task));
-      try{sent=(await sendNotification({manager:claimed.manager,message,kind,directory:args.get('--state-dir')||stateDir()})).state==='ACCEPTED';}
-      catch(error){sent=false;console.error(`manager ${kind} delivery failed: ${error.message}`);}
-    }
-    const now = timestamp();
-    for (const {task, row} of eligible) {
-      row[col.recovery_state] = sent ? successState : '';
-      row[col.recovery_turn_id] = sent ? task.generation : '';
-      row[col.recovery_state_at] = sent ? now : '';
-      row[col.modified_at] = now;
-    }
-    return {changed: true, sent, count: eligible.length};
-  });
-  if (result.sent && result.count && process.env.CODEX_PM_REPORT_ACTION === '1') console.log(`CODEX_PM_ACTION ${kind}-sent ${result.count}`);
-  return result.sent;
-}
-const decisionHelp = '请通过已授权的本机工作台或 CLI 核对任务、回调与成果，再决定下一步。不要仅凭运行观察推断停止或完成。通知被接受不代表经理已处理。';
-const recoveryMessage = () => `PROJECT_MANAGER_RECONCILIATION · 有执行活动结束，需要经理核对。\n${decisionHelp}`;
-async function deliverGroups(kind,tasks,message,state){
-  let ok=true;
-  for(const manager of new Set(tasks.map(t=>t.manager))){claimed.manager=manager;ok=(await deliver(kind,tasks.filter(t=>t.manager===manager),message,state))&&ok;}
-  return ok;
-}
-const recoverySent = await deliverGroups("recovery", claimed.tasks, recoveryMessage, "sent");
-const warningMessage = () => `PROJECT_MANAGER_WARNING · 部分运行观察需要经理检查。\n${decisionHelp}`;
-const warningSent = await deliverGroups("warning", claimed.warningTasks, warningMessage, "warning-sent");
-const pending = await reportPending();
-if (!recoverySent || !warningSent) process.exit(2);
-if (claimed.warnings.length || pending) process.exit(3);

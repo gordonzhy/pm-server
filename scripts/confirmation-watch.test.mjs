@@ -6,6 +6,7 @@ import {promisify} from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {reminderMessage} from '../lib/reminder-delivery.mjs';
 import {watchConfirmations,confirmationMessage} from './confirmation-watch.mjs';
 const exec=promisify(execFile),scripts=path.dirname(fileURLToPath(import.meta.url));
 const manager='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
@@ -34,15 +35,15 @@ test('pending-only worker sends one cross-project aggregate without execution ob
  const f=await fixture(t),a=await f.project(0),b=await f.project(1);const originals=await Promise.all([a,b].map(x=>readFile(x.p.csvPath,'utf8')));
  await exec(process.execPath,[path.join(scripts,'run-task-monitor.mjs'),'--state-dir',f.directory,'--once'],{env:f.env});
  const health=JSON.parse(await readFile(path.join(f.directory,'task-monitor.json'),'utf8'));assert.equal(health.confirmationWatch.accepted,2);assert.equal(health.confirmationWatch.awaiting,2);
- const messages=(await f.messages()).filter(x=>x[1]==='confirmation');assert.equal(messages.length,1);assert.equal(messages[0][2],confirmationMessage);assert.ok(!JSON.stringify(messages).includes('PRIVATE_CANARY'));assert.equal(messages[0][0],'codex:default:'+manager);
+ const messages=(await f.messages()).filter(x=>x[1]==='reconciliation');assert.equal(messages.length,1);assert.equal(messages[0][2],reminderMessage);assert.ok(!JSON.stringify(messages).includes('PRIVATE_CANARY'));assert.equal(messages[0][0],'codex:default:'+manager);
  assert.deepEqual(await Promise.all([a,b].map(x=>readFile(x.p.csvPath,'utf8'))),originals);
- await exec(process.execPath,[path.join(scripts,'run-task-monitor.mjs'),'--state-dir',f.directory,'--once'],{env:f.env});assert.equal((await f.messages()).filter(x=>x[1]==='confirmation').length,1);
+ await exec(process.execPath,[path.join(scripts,'run-task-monitor.mjs'),'--state-dir',f.directory,'--once'],{env:f.env});assert.equal((await f.messages()).filter(x=>x[1]==='reconciliation').length,1);
 });
 test('new and invalid timestamps age from first seen; accepted reminders repeat after cooldown',async t=>{
  const f=await fixture(t),a=await f.project(),now=Date.now();a.rows[0][8]='invalid';await a.save();
  assert.equal((await f.run({now})).accepted,0);assert.equal((await f.run({now:now+3600001})).accepted,1);
  assert.equal((await f.run({now:now+7200000})).accepted,0);assert.equal((await f.run({now:now+90000002})).accepted,1);
- for(const timestamp of ['',new Date(now+1000000000).toISOString(),new Date(now).toISOString()]){a.rows[0][8]=timestamp;await a.save();assert.equal((await f.run({now})).accepted,0);assert.equal((await f.run({now:now+3600001})).accepted,1);}
+ for(const timestamp of ['',new Date(now+1000000000).toISOString(),new Date(now).toISOString()]){const fresh=await fixture(t),card=await fresh.project();card.rows[0][8]=timestamp;await card.save();assert.equal((await fresh.run({now})).accepted,0);assert.equal((await fresh.run({now:now+3600001})).accepted,1);}
 });
 test('status departure, reentry, card changes and manager changes invalidate episodes',async t=>{
  const f=await fixture(t),a=await f.project(),now=Date.now();assert.equal((await f.run({now})).accepted,1);
@@ -53,9 +54,9 @@ test('status departure, reentry, card changes and manager changes invalidate epi
 });
 test('disabled and failed deliveries are visible and rate limited; no manager or corrupt project isolated',async t=>{
  const f=await fixture(t),a=await f.project(),now=Date.now();let result=await f.run({now,env:{...f.env,PROJECT_MANAGER_NOTIFY_DISABLED:'1'}});assert.equal(result.failed,1);assert.equal(result.state,'WARNING');
- assert.equal((await f.run({now:now+1})).accepted,0);assert.equal((await f.run({now:now+300001,env:{...f.env,DEMO_FAIL:'1'}})).failed,1);assert.equal((await f.run({now:now+600002})).accepted,1);
- await a.config(null);result=await f.run({now:now+600003});assert.ok(result.diagnostics.includes('MANAGER_UNAVAILABLE'));assert.equal(result.accepted,0);
- const b=await f.project(1);await writeFile(a.p.csvPath,'broken');result=await f.run();assert.equal(result.accepted,1);assert.ok(result.diagnostics.includes('PROJECT_SOURCE_UNAVAILABLE'));
+ assert.equal((await f.run({now:now+1})).accepted,0);assert.equal((await f.run({now:now+600001,env:{...f.env,DEMO_FAIL:'1'}})).failed,1);assert.equal((await f.run({now:now+1200002})).accepted,1);
+ await a.config(null);result=await f.run({now:now+1200003});assert.ok(result.diagnostics.includes('MANAGER_UNAVAILABLE'));assert.equal(result.accepted,0);
+ const b=await f.project(1);await writeFile(a.p.csvPath,'broken');result=await f.run({now:now+1800004});assert.equal(result.accepted,1);assert.ok(result.diagnostics.includes('PROJECT_SOURCE_UNAVAILABLE'));
  f.registry.projects=[];await f.saveRegistry();assert.equal((await f.run()).awaiting,0);
 });
 test('concurrent watchers persist a single accepted reminder',async t=>{
@@ -76,9 +77,9 @@ test('send-time revalidation rejects removal, status changes, route changes and 
 });
 test('failed delivery has a fast retry budget and health retains failures during cooldown',async t=>{
  const f=await fixture(t);await f.project();const now=Date.now(),env={...f.env,DEMO_FAIL:'1'};
- for(const offset of [0,300001,600002])assert.equal((await f.run({now:now+offset,env})).failed,1);
- const cooling=await f.run({now:now+900003,env});assert.equal(cooling.failed,0);assert.equal(cooling.delivery.failed,1);assert.equal(cooling.state,'WARNING');assert.equal((await f.messages()).length,3);
- assert.equal((await f.run({now:now+87000003,env})).failed,1);
+ for(const offset of [0,600001,1200002])assert.equal((await f.run({now:now+offset,env})).failed,1);
+ const cooling=await f.run({now:now+1800003,env});assert.equal(cooling.failed,0);assert.equal(cooling.delivery.failed,1);assert.equal(cooling.state,'WARNING');assert.equal((await f.messages()).length,3);
+ assert.equal((await f.run({now:now+88000003,env})).failed,1);
 });
 test('temporary source errors preserve cooldown, whereas explicit removal forgets the episode',async t=>{
  const f=await fixture(t),a=await f.project(),now=Date.now();assert.equal((await f.run({now})).accepted,1);const csv=await readFile(a.p.csvPath,'utf8');await writeFile(a.p.csvPath,'bad');assert.ok((await f.run({now:now+1})).diagnostics.includes('PROJECT_SOURCE_UNAVAILABLE'));

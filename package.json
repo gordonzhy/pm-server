@@ -57,7 +57,9 @@
     "docs/continuous-delivery.md",
     "docs/continuous-delivery.zh-CN.md",
     "lib/setup-wizard.mjs",
-    "lib/share-view.mjs"
+    "lib/share-view.mjs",
+    "lib/reminder-delivery.mjs",
+    "scripts/monitor-checkpoint.mjs"
   ],
   "engines": {
     "node": ">=22.0.0"

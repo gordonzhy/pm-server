@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Batch ordinary manager reminders across turns and projects, persist bounded handling checkpoints, and back off unhandled episodes.
+
+
 - Add bounded hourly GitHub issue acknowledgement and a persistent maintainer queue for Actions failures and PR approval attention.
 
 GitHub source changes below are not included in the published npm `0.1.0-rc.16` package.

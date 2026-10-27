@@ -61,8 +61,8 @@ for(const change of ['registered manager','task manager','dispatch','execution',
  fx.run('once');
  const s=await fx.snapshot();
  assert.equal(s.tasks['DEMO-001'].monitor_pause_until,'');
- if(change==='execution'){fx.row[4]=execution;await fx.saveTask();fx.run('once');assert.equal((await fx.snapshot()).tasks['DEMO-001'].monitor_pause_until,'');assert.equal((await fx.notifications()).trim(),'warning');}
- if(!['status','execution'].includes(change))assert.equal((await fx.notifications()).trim(),'warning');
+ if(change==='execution'){fx.row[4]=execution;await fx.saveTask();fx.run('once');assert.equal((await fx.snapshot()).tasks['DEMO-001'].monitor_pause_until,'');assert.equal((await fx.notifications()).trim(),'');}
+ if(!['status','execution'].includes(change))assert.equal((await fx.notifications()).trim(),'');
 });
 test('concurrent CLI pause and monitor cycles preserve the final pause',async t=>{
  const fx=await fixture(t);fx.run('pause');await Promise.all([fx.asyncRun('pause'),fx.asyncRun('once')]);fx.run('once');
@@ -90,10 +90,10 @@ test('scope compatibility requires complete shape and rejects true manager chang
 test('legacy five scope invalidates when registered manager really changes',async t=>{
  const fx=await fixture(t);fx.run('pause');const before=await fx.snapshot(),task=before.tasks['DEMO-001'],scope=JSON.parse(task.scope);scope[3]=manager;task.scope=JSON.stringify(scope);await writeFile(fx.file,JSON.stringify(before));
  fx.config.manager.threadId=execution;await fx.saveConfig();fx.run('once');
- assert.equal((await fx.snapshot()).tasks['DEMO-001'].monitor_pause_until,'');assert.equal((await fx.notifications()).trim(),'warning');
+ assert.equal((await fx.snapshot()).tasks['DEMO-001'].monitor_pause_until,'');assert.equal((await fx.notifications()).trim(),'');
 });
 for(const registered of [false,true])test(`legacy complete scope retains warning dedup without a pause (registered=${registered})`,async t=>{
- const fx=await fixture(t,{registered});fx.run('once');assert.equal((await fx.notifications()).trim(),'warning');
+ const fx=await fixture(t,{registered});fx.run('once');assert.equal((await fx.notifications()).trim(),'');
  const before=await fx.snapshot(),task=before.tasks['DEMO-001'],scope=JSON.parse(task.scope);scope[3]=manager;task.scope=JSON.stringify(scope);await writeFile(fx.file,JSON.stringify(before));
- fx.run('once');assert.deepEqual(await fx.snapshot(),before);assert.equal((await fx.notifications()).trim(),'warning');
+ fx.run('once');assert.equal((await fx.snapshot()).tasks['DEMO-001'].scope,before.tasks['DEMO-001'].scope);assert.equal((await fx.notifications()).trim(),'');
 });

@@ -4,7 +4,7 @@ import {registeredManagerReference} from '../lib/notifications.mjs';
 const managerReference = value => registeredManagerReference(value) || value || '';
 export function monitorScope(task, projectManager = null) {
   return JSON.stringify([task.dispatch_id || '', task.execution_thread_id || '',
-    task.execution_turn_id || '', managerReference(task.manager_thread_id),
+    '', managerReference(task.manager_thread_id),
     ...(projectManager ? [managerReference(projectManager)] : [])]);
 }
 
@@ -14,7 +14,7 @@ export function monitorScopeMatches(saved, task, projectManager = null) {
   const expected = JSON.parse(monitorScope(task, projectManager));
   if (!Array.isArray(previous) || previous.length !== expected.length
       || !previous.every(value => typeof value === 'string')) return false;
-  return previous.every((value, index) => (index >= 3 ? managerReference(value) : value) === expected[index]);
+  return previous.every((value, index) => (index === 2 || (index >= 3 ? managerReference(value) : value) === expected[index]));
 }
 
 export const pauseFields = ['monitor_pause_until', 'monitor_pause_reason', 'monitor_pause_scope'];

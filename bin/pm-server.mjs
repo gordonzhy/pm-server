@@ -26,7 +26,7 @@ async function serviceStatus(){return {workbench:parsed(run('manage-workbench-se
 async function control(enabled){await mkdir(stateDir(),{recursive:true,mode:0o700});const f=path.join(stateDir(),'control.json'),tmp=f+'.'+process.pid+'.tmp';await writeFile(tmp,JSON.stringify({enabled,changedAt:new Date().toISOString()})+'\n',{mode:0o600});await rename(tmp,f);}
 try {
  if(!command||['help','--help','-h'].includes(command)){
-  console.log(`PM Server ${pkg.version}\n\n项目留在你的仓库，进展汇聚到同一个工作台。\n\nCommands:\n  setup [codex] [--json | --dry-run] [--port PORT] [--state-dir PATH]\n  doctor | status [--json] [--check-host] [--state-dir PATH]\n  service start|ensure|stop|status|run [--port 9999] [--state-dir PATH]\n  project request|list|collect [--repo PATH] [--csv PATH]\n  monitor once|pause|resume [--repo PATH] [--task ID]\n  adapter list|check|install codex|dsh|claude-code [--dry-run]\n  notification test --manager HOST:INSTANCE:SESSION_ID\n  event ingest --host HOST --instance ID\n  --version\n\nNo install hooks, automatic host changes or startup at npm install time.`);
+  console.log(`PM Server ${pkg.version}\n\n项目留在你的仓库，进展汇聚到同一个工作台。\n\nCommands:\n  setup [codex] [--json | --dry-run] [--port PORT] [--state-dir PATH]\n  doctor | status [--json] [--check-host] [--state-dir PATH]\n  service start|ensure|stop|status|run [--port 9999] [--state-dir PATH]\n  project request|list|collect [--repo PATH] [--csv PATH]\n  monitor once|status|checkpoint|release|pause|resume [--repo PATH] [--task ID]\n    checkpoint: --dispatch ID --execution ID --manager HOST:INSTANCE:ID --until ISO --reason TEXT --actor TEXT (max 24h)\n  adapter list|check|install codex|dsh|claude-code [--dry-run]\n  notification test --manager HOST:INSTANCE:SESSION_ID\n  event ingest --host HOST --instance ID\n  --version\n\nNo install hooks, automatic host changes or startup at npm install time.`);
  } else if(command==='--version'||command==='version')console.log(pkg.version);
  else if(command==='doctor')output({application:'pm-server',version:pkg.version,contractVersion:1,node:process.version,stateDir:stateDir(),runtimeCsv:runtimeCsv(),platform:process.platform,validatedPlatforms:['darwin'],services:await serviceStatus(),onboarding:await onboardingStatus({checkHost:args.includes('--check-host')}),hostIntegration:'See onboarding checks; cached observations are not hook trust or delivery verification.'});
  else if(command==='status')output({application:'pm-server',version:pkg.version,contractVersion:1,stateDir:stateDir(),runtimeCsv:runtimeCsv(),...await serviceStatus(),onboarding:await onboardingStatus({checkHost:args.includes('--check-host')})});
@@ -61,8 +61,9 @@ try {
  }else if(command==='monitor'){
   const action=args.shift();
   if(action==='once'){const r=run(args.includes('--repo')?'watch-active-tasks.mjs':'run-task-monitor.mjs',[...args,...shared,...(args.includes('--repo')?[]:['--once'])],{accept:true});if(r.stdout.trim())console.log(r.stdout.trim());if(r.stderr.trim())console.error(r.stderr.trim());process.exitCode=r.code;}
+  else if(['status','checkpoint','release'].includes(action))console.log(run('monitor-checkpoint.mjs',[action,...args]).stdout.trim());
   else if(['pause','resume'].includes(action))console.log(run('pause-task-monitor.mjs',[...args,...shared,...(action==='resume'?['--resume']:[])]).stdout.trim());
-  else throw new Error('monitor once|pause|resume');
+  else throw new Error('monitor once|status|checkpoint|release|pause|resume');
  }else if(command==='service'){
   const action=args.shift();
   if(action==='status')output(await serviceStatus());

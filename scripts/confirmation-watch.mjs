@@ -1,4 +1,5 @@
 // Independent manager follow-up for awaiting-confirmation tasks. Source files are read-only.
+import {deliverReminder} from '../lib/reminder-delivery.mjs';
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, readFile, writeFile, rename} from 'node:fs/promises';
 import path from 'node:path';
@@ -75,9 +76,10 @@ export async function watchConfirmations({directory,env=process.env,now=Date.now
    if(!eligible.length)continue;
    for(const task of eligible){const item=next.tasks[task.key];item.nextAt=now+repeat;item.delivery='UNKNOWN';}
    await save(); // An interrupted backend call cannot create a rapid duplicate.
-   let accepted=false;
-   try{accepted=(await sendNotification({manager,message:confirmationMessage,kind:'confirmation',directory,env})).state==='ACCEPTED';}catch{}
-   for(const task of eligible){const item=next.tasks[task.key];item.delivery=accepted?'ACCEPTED':'FAILED';item.failures=accepted?0:Math.min((item.failures||0)+1,3);item.nextAt=now+(accepted||item.failures>=3?repeat:retry);}
+   let accepted=false,receipt;
+   try{receipt=await deliverReminder({manager,directory,env,now,cover:false,queuedAt:now-600000});accepted=receipt.state==='ACCEPTED';}catch{}
+   if(receipt&&['BATCHING','CLOCK_REBASED'].includes(receipt.state)){for(const task of eligible){const item=next.tasks[task.key];item.queuedAt=receipt.state==='CLOCK_REBASED'?now:item.queuedAt??now;item.nextAt=receipt.nextAt;item.delivery='BATCHING';}summary.cooling+=eligible.length;await save();continue;}
+   for(const task of eligible){const item=next.tasks[task.key];delete item.queuedAt;item.delivery=accepted?'ACCEPTED':'FAILED';item.failures=accepted?0:Math.min((item.failures||0)+1,3);item.nextAt=now+(accepted||item.failures>=3?repeat:Math.max(retry,600000));}
    if(accepted)summary.accepted+=eligible.length;else summary.failed+=eligible.length;
    await save();
   }

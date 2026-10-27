@@ -27,13 +27,17 @@ async function fixture(executionState = "idle", managerState = "idle") {
   await writeFile(runtimeCsv, `session_id,name,status,current_turn_id,status_at,last_seen_at\n${execution},Execution,${executionState},turn-1,${runtimeNow},${runtimeNow}\n${manager},Manager,${managerState},manager-turn,${runtimeNow},${runtimeNow}\n`);
   await writeFile(fakeCodex, "#!/bin/sh\nprintf '%s\\0' \"$*\" >> \"$PROJECT_MANAGER_QUEUE_LOG\"\n");
   await chmod(fakeCodex, 0o755);
-  return { repo, queueLog, runtimeCsv, env: { ...process.env, PM_SERVER_STATE_DIR: path.join(root,"server-state"), PROJECT_MANAGER_CODEX_BIN: fakeCodex, PROJECT_MANAGER_QUEUE_LOG: queueLog, CODEX_SESSION_RUNTIME_CSV: runtimeCsv } };
+  const clock=path.join(root,'clock.mjs'), clockFile=path.join(root,'clock.txt');
+  await writeFile(clockFile,String(Date.now()));
+  await writeFile(clock,"import{readFileSync}from'node:fs';const NativeDate=Date;globalThis.Date=class extends NativeDate{constructor(...a){super(...(a.length?a:[Number(readFileSync(process.env.DEMO_CLOCK,'utf8'))]));}static now(){return Number(readFileSync(process.env.DEMO_CLOCK,'utf8'));}};");
+  return { repo, queueLog, runtimeCsv, clockFile, env: { ...process.env, NODE_OPTIONS:'--import='+clock, DEMO_CLOCK:clockFile, PM_SERVER_STATE_DIR: path.join(root,"server-state"), PROJECT_MANAGER_CODEX_BIN: fakeCodex, PROJECT_MANAGER_QUEUE_LOG: queueLog, CODEX_SESSION_RUNTIME_CSV: runtimeCsv } };
 }
 
 function stateFile(fx){return path.join(fx.env.PM_SERVER_STATE_DIR,'monitor',createHash('sha256').update(fx.repo).digest('hex')+'.json');}
 async function state(fx){return JSON.parse(await readFile(stateFile(fx),'utf8'));}
 
 function watch(fx) {
+  if(!fx.warmed){fx.warmed=true;try{execFileSync(process.execPath,[watcher,'--repo',fx.repo,'--grace','0'],{env:fx.env,stdio:'pipe'});}catch(error){if(error.status!==3)throw error;}execFileSync(process.execPath,['-e',"const f=require('fs'),p=process.argv[1];f.writeFileSync(p,String(Number(f.readFileSync(p,'utf8'))+600001))",fx.clockFile]);}
   execFileSync(process.execPath, [watcher, "--repo", fx.repo, "--grace", "0", "--stale-after", "1800"], { env: fx.env });
 }
 
@@ -70,7 +74,7 @@ test("running status stays fresh when activity is recent but the status began ea
   assert.deepEqual(await queues(fx), []);
 });
 
-test("idle manager and execution queue exactly once per execution turn", async () => {
+test("idle manager and execution deduplicate one unhandled business event", async () => {
   const fx = await fixture();
   watch(fx);
   watch(fx);
@@ -103,16 +107,16 @@ test("inactive evidence remains usable beyond the active freshness window", asyn
   assert.equal((await queues(fx)).length, 1);
 });
 
-test("a new execution turn forms a new recovery generation", async () => {
+test("a new execution turn retains the unhandled recovery event", async () => {
   const fx = await fixture();
   watch(fx);
   const runtime = await readFile(fx.runtimeCsv, "utf8");
   await writeFile(fx.runtimeCsv, runtime.replace(`${execution},Execution,idle,turn-1,`, `${execution},Execution,idle,turn-2,`));
   watch(fx);
-  assert.equal((await queues(fx)).length, 2);
+  assert.equal((await queues(fx)).length, 1);
 });
 
-test("runtime turns drive recovery when workers never update TASKS.csv", async () => {
+test("runtime turns retain dedup when workers never update TASKS.csv", async () => {
   const fx = await fixture();
   const csvPath = path.join(fx.repo, "TASKS.csv");
   await writeFile(csvPath, (await readFile(csvPath, "utf8")).replace(`,turn-1,${manager}`, `,,${manager}`));
@@ -120,7 +124,7 @@ test("runtime turns drive recovery when workers never update TASKS.csv", async (
   const runtime = await readFile(fx.runtimeCsv, "utf8");
   await writeFile(fx.runtimeCsv, runtime.replace(`${execution},Execution,idle,turn-1,`, `${execution},Execution,idle,turn-2,`));
   watch(fx);
-  assert.equal((await queues(fx)).length, 2);
+  assert.equal((await queues(fx)).length, 1);
   const csv = await readFile(csvPath, "utf8");
   assert.equal((await state(fx)).tasks["TEST-001"].recovery_state,"sent");
 });
@@ -157,7 +161,7 @@ test("manager can pause a warning with deadline and reason; a changed dispatch n
   assert.ok((await state(fx)).tasks["TEST-001"].monitor_pause_until);
   await writeFile(csvPath, (await readFile(csvPath, "utf8")).replace("dispatch-test,", "dispatch-next,"));
   watchWarning(fx);
-  assert.equal((await queues(fx)).length, 2);
+  assert.equal((await queues(fx)).length, 1);
 });
 
 const pauser = path.join(scripts, 'pause-task-monitor.mjs');
@@ -172,7 +176,8 @@ test('pause is stored outside project, preserves task files, expires and suppres
   assert.doesNotMatch(detail,/等待定时批处理/);assert.match(detail,/## 后续说明\n\n保留原文/);
   const saved=await state(fx);saved.tasks['TEST-001'].monitor_pause_until='2020-01-01T00:00:00Z';
   await writeFile(stateFile(fx),JSON.stringify(saved));
-  watch(fx); watch(fx); assert.equal((await queues(fx)).length, 1);
+  watch(fx); watch(fx); assert.equal((await queues(fx)).length,0);
+  await writeFile(fx.clockFile,String(Number(await readFile(fx.clockFile,'utf8'))+600001));watch(fx);assert.equal((await queues(fx)).length,1);
 });
 test('new runtime turn or execution session cancels a pause', async () => {
   for (const change of ['turn', 'session']) {
@@ -203,19 +208,20 @@ test('manual resume changes application state and missing reason or deadline fai
   assert.doesNotMatch(await readFile(path.join(fx.repo,'test.md'),'utf8'),/恢复执行会话监测/);
   assert.equal(await readFile(csvPath,'utf8'),before);
 });
-test('activity in the same turn rearms the next inactive episode', async () => {
+test('stop and resume in the same turn retains the unhandled event', async () => {
   const fx = await fixture(); watch(fx);
   const cache = await readFile(fx.runtimeCsv, 'utf8');
   await writeFile(fx.runtimeCsv, cache.replace(`${execution},Execution,idle`, `${execution},Execution,running`)); watch(fx);
   await writeFile(fx.runtimeCsv, cache); watch(fx);
-  assert.equal((await queues(fx)).length, 2);
+  assert.equal((await queues(fx)).length, 1);
 });
 test('failed queue delivery remains retryable', async () => {
   const fx = await fixture();
   const fake = fx.env.PROJECT_MANAGER_CODEX_BIN;
   const original = await readFile(fake, 'utf8'); await writeFile(fake, '#!/bin/sh\nexit 1\n');
-  assert.throws(() => watch(fx), error => error.status === 2);
-  await writeFile(fake, original); watch(fx); assert.equal((await queues(fx)).length, 1);
+  assert.throws(() => watch(fx), error => error.status === 3);
+  await writeFile(fake, original); watchWarning(fx); assert.equal((await queues(fx)).length, 0);
+  execFileSync(process.execPath,['-e',"const f=require('fs'),p=process.argv[1];f.writeFileSync(p,String(Number(f.readFileSync(p,'utf8'))+600001))",fx.clockFile]);watch(fx);assert.equal((await queues(fx)).length,1);
 });
 
 
@@ -236,6 +242,8 @@ test("background recovery uses the saved backend in the explicit state directory
   const fx = await fixture(),directory=fx.env.PM_SERVER_STATE_DIR;
   await mkdir(directory,{recursive:true});await writeFile(path.join(directory,'notification-config.json'),JSON.stringify({version:1,backend:'codex'}));
   const env={...fx.env,PM_SERVER_STATE_DIR:path.join(directory,'different-default'),PATH:path.dirname(fx.env.PROJECT_MANAGER_CODEX_BIN)+path.delimiter+process.env.PATH,PROJECT_MANAGER_CODEX_BIN:'',PROJECT_MANAGER_NOTIFY_BIN:'',PROJECT_MANAGER_NOTIFY_DISABLED:''};
+  execFileSync(process.execPath,[watcher,'--repo',fx.repo,'--state-dir',directory,'--grace','0','--stale-after','1800'],{env});
+  await writeFile(fx.clockFile,String(Number(await readFile(fx.clockFile,'utf8'))+600001));
   execFileSync(process.execPath,[watcher,'--repo',fx.repo,'--state-dir',directory,'--grace','0','--stale-after','1800'],{env});
   assert.equal((await queues(fx)).length,1);
   assert.equal((await state(fx)).tasks['TEST-001'].recovery_state,'sent');

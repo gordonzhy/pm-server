@@ -308,7 +308,7 @@ async function checkOnce() {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       if(chunk.includes("CODEX_PM_DIAGNOSTIC"))diagnostic=true;
-      if (chunk.includes("CODEX_PM_ACTION recovery-sent") || chunk.includes("CODEX_PM_ACTION warning-sent")) action = true;
+      if (chunk.includes("CODEX_PM_ACTION reconciliation-sent") || chunk.includes("CODEX_PM_ACTION recovery-sent") || chunk.includes("CODEX_PM_ACTION warning-sent")) action = true;
     });
     child.once("error", reject);
     child.once("exit", (code, signal) => {
